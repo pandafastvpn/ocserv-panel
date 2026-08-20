@@ -1,0 +1,128 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>ocserv-panel - 用户组管理</title>
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;background:#0f172a;color:#e2e8f0}
+.sidebar{position:fixed;left:0;top:0;width:240px;height:100vh;background:#1e293b;border-right:1px solid #334155;padding:20px 0;overflow-y:auto}
+.sidebar h1{font-size:18px;text-align:center;margin-bottom:30px;color:#38bdf8}
+.sidebar a{display:block;padding:12px 24px;color:#94a3b8;text-decoration:none;transition:all .2s}
+.sidebar a:hover{background:#334155;color:#e2e8f0}
+.sidebar a.active{background:#0ea5e9;color:#fff}
+.main{margin-left:240px;padding:30px;min-height:100vh}
+.card{background:#1e293b;border:1px solid #334155;border-radius:8px;padding:24px;margin-bottom:20px}
+.card h2{font-size:18px;margin-bottom:16px;color:#38bdf8}
+.btn{display:inline-block;padding:8px 20px;border:none;border-radius:6px;font-size:14px;cursor:pointer;text-decoration:none}
+.btn-primary{background:#0ea5e9;color:#fff}.btn-danger{background:#dc2626;color:#fff}
+.btn-sm{padding:4px 12px;font-size:12px}
+table{width:100%;border-collapse:collapse}
+table th,table td{padding:10px 12px;text-align:left;border-bottom:1px solid #334155;font-size:14px}
+table th{color:#94a3b8;font-weight:600}
+form label{display:block;margin-bottom:6px;font-size:14px;color:#94a3b8}
+form input{width:100%;padding:8px 12px;background:#0f172a;border:1px solid #334155;border-radius:6px;color:#e2e8f0;font-size:14px;margin-bottom:16px}
+.row{display:flex;gap:20px}.col{flex:1}
+.alert{padding:12px 16px;border-radius:6px;margin-bottom:16px}
+.alert-info{background:#0c4a6e;border:1px solid #0ea5e9}
+code{background:#0f172a;padding:2px 6px;border-radius:4px;font-size:13px;color:#4ade80}
+</style>
+</head>
+<body>
+<div class="sidebar">
+<h1>ocserv-panel</h1>
+<a href="/">控制台</a>
+<a href="/sessions">在线会话</a>
+<a href="/groups" class="active">用户组管理</a>
+<a href="/ocserv">Ocserv 设置</a>
+<a href="/radius">RADIUS 设置</a>
+<a href="/certs">证书管理</a>
+<a href="/monitor">节点监控</a>
+<a href="/settings">面板设置</a>
+<a href="/logs">实时日志</a>
+<a href="/logout">退出登录</a>
+</div>
+<div class="main">
+<h2 style="margin-bottom:20px;color:#38bdf8;">用户组管理</h2>
+<div class="card">
+<div class="alert alert-info">
+<p><strong>FreeRADIUS 组策略说明</strong></p>
+<p style="margin-top:8px;">现在使用 FreeRADIUS 认证，ocserv 通过 <code>groupconfig=true</code> 读取 RADIUS 返回的 <code>Class</code> 属性来识别组。</p>
+<p style="margin-top:8px;">请在 FreeRADIUS 里给用户返回 <code>Class = OU=组名</code>，例如 <code>OU=premium</code>，ocserv 会自动套用此页面里同名组的 DNS / 路由 / 限速策略。</p>
+<p style="margin-top:8px;">本页面创建的是 ocserv 的本地组配置文件，用于定义该组的限速、路由、DNS、超时等策略。</p>
+<p style="margin-top:8px;"><strong>注意：</strong>用户连接时不需要手动输入组名；如果 FreeRADIUS 没有下发 Class，用户将使用默认组。</p>
+</div>
+</div>
+<div class="card">
+<div class="alert alert-warning">
+<p><strong>关于登录界面流程说明</strong></p>
+<p style="margin-top:8px;">OpenConnect / AnyConnect 协议的标准登录流程是：</p>
+<p style="margin-top:4px;">① 选择组 + 输入用户名 → ② 点连接 → ③ 输入密码</p>
+<p style="margin-top:8px;">这是<strong>客户端协议层面决定的</strong>，ocserv 无法把三个字段强制变成一个页面。若要单页登录，需要定制客户端或 Web Portal。</p>
+</div>
+</div>
+<div class="card">
+<h2>已有用户组</h2>
+{{if .Groups}}
+<table>
+<thead><tr><th>组名</th><th>显示名</th><th>下载限速 (bytes/s)</th><th>上传限速 (bytes/s)</th><th>会话超时 (秒)</th><th>空闲超时 (秒)</th><th>DNS</th><th>路由</th><th>操作</th></tr></thead>
+<tbody>
+{{range .Groups}}
+<tr>
+<td>{{.Name}}</td>
+<td>{{if eq .DisplayName ""}}{{.Name}}{{else}}{{.DisplayName}}{{end}}</td>
+<td>{{if eq .RxDataPerSec 0}}不限{{else}}{{.RxDataPerSec}}{{end}}</td>
+<td>{{if eq .TxDataPerSec 0}}不限{{else}}{{.TxDataPerSec}}{{end}}</td>
+<td>{{if eq .SessionTimeout 0}}不限{{else}}{{.SessionTimeout}}{{end}}</td>
+<td>{{if eq .IdleTimeout 0}}无{{else}}{{.IdleTimeout}}{{end}}</td>
+<td>{{if eq .DNS ""}}默认{{else}}{{.DNS}}{{end}}</td>
+<td style="max-width:200px;word-break:break-all;">{{if eq .Routes ""}}默认{{else}}{{.Routes}}{{end}}</td>
+<td><a href="/groups/delete?name={{.Name}}" class="btn btn-danger btn-sm" onclick="return confirm('确定删除组 {{.Name}}？')">删除</a></td>
+</tr>
+{{end}}
+</tbody>
+</table>
+{{else}}
+<p style="color:#94a3b8;">暂无用户组，请在下方创建。</p>
+{{end}}
+</div>
+<div class="card">
+<h2>创建 / 编辑用户组</h2>
+<form action="/groups/save" method="POST">
+<div class="row">
+<div class="col"><label>组名（字母、数字、下划线、横线）</label><input type="text" name="name" placeholder="如 premium, basic, vip" required pattern="[a-zA-Z0-9_-]+"></div>
+<div class="col"><label>显示名（可选，支持中文）</label><input type="text" name="display_name" placeholder="如 高级用户、免费用户"></div>
+<div class="col"><label>最大同连接数（0 = 使用全局设置）</label><input type="number" name="max_same_clients" value="0" min="0"></div>
+</div>
+<div class="row">
+<div class="col"><label>下载限速 (bytes/sec, 0 = 不限)</label><input type="number" name="rx_data_per_sec" value="0" min="0" placeholder="1048576 = 1MB/s"></div>
+<div class="col"><label>上传限速 (bytes/sec, 0 = 不限)</label><input type="number" name="tx_data_per_sec" value="0" min="0" placeholder="1048576 = 1MB/s"></div>
+</div>
+<div class="row">
+<div class="col"><label>会话超时（秒，0 = 不限）</label><input type="number" name="session_timeout" value="0" min="0" placeholder="86400 = 24小时"></div>
+<div class="col"><label>空闲超时（秒，0 = 不限）</label><input type="number" name="idle_timeout" value="0" min="0" placeholder="1200 = 20分钟"></div>
+</div>
+<label>DNS 服务器（空格分隔，留空使用全局）</label>
+<input type="text" name="dns" placeholder="如 8.8.8.8 1.1.1.1">
+<label>路由（空格分隔 CIDR，留空使用全局）</label>
+<input type="text" name="routes" placeholder="如 10.0.0.0/8 192.168.0.0/16">
+<label>排除路由（空格分隔 CIDR）</label>
+<input type="text" name="no_routes" placeholder="如 192.168.1.0/24">
+<button type="submit" class="btn btn-primary">保存用户组</button>
+</form>
+</div>
+<div class="card">
+<h2>限速参考</h2>
+<table>
+<tr><th>带宽</th><th>bytes/sec</th></tr>
+<tr><td>1 Mbps</td><td>125000</td></tr>
+<tr><td>5 Mbps</td><td>625000</td></tr>
+<tr><td>10 Mbps</td><td>1250000</td></tr>
+<tr><td>50 Mbps</td><td>6250000</td></tr>
+<tr><td>100 Mbps</td><td>12500000</td></tr>
+</table>
+</div>
+</div>
+</body>
+</html>

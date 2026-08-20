@@ -1,0 +1,119 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>ocserv-panel - RADIUS 设置</title>
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;background:#0f172a;color:#e2e8f0}
+.sidebar{position:fixed;left:0;top:0;width:240px;height:100vh;background:#1e293b;border-right:1px solid #334155;padding:20px 0;overflow-y:auto}
+.sidebar h1{font-size:18px;text-align:center;margin-bottom:30px;color:#38bdf8}
+.sidebar a{display:block;padding:12px 24px;color:#94a3b8;text-decoration:none;transition:all .2s}
+.sidebar a:hover{background:#334155;color:#e2e8f0}
+.sidebar a.active{background:#0ea5e9;color:#fff}
+.main{margin-left:240px;padding:30px;min-height:100vh}
+.card{background:#1e293b;border:1px solid #334155;border-radius:8px;padding:24px;margin-bottom:20px}
+.card h2{font-size:18px;margin-bottom:16px;color:#38bdf8}
+.btn{display:inline-block;padding:8px 20px;border:none;border-radius:6px;font-size:14px;cursor:pointer}
+.btn-primary{background:#0ea5e9;color:#fff}.btn-success{background:#16a34a;color:#fff}
+table{width:100%;border-collapse:collapse}
+table th,table td{padding:10px 12px;text-align:left;border-bottom:1px solid #334155;font-size:14px}
+table th{color:#94a3b8;font-weight:600}
+form label{display:block;margin-bottom:6px;font-size:14px;color:#94a3b8}
+form input{width:100%;padding:8px 12px;background:#0f172a;border:1px solid #334155;border-radius:6px;color:#e2e8f0;font-size:14px;margin-bottom:16px}
+.row{display:flex;gap:20px}.col{flex:1}
+pre{background:#0f172a;padding:12px;border-radius:6px;color:#4ade80;overflow-x:auto;font-size:13px;white-space:pre-wrap;max-height:400px;overflow-y:auto}
+code{background:#0f172a;padding:2px 6px;border-radius:4px;font-size:13px;color:#4ade80}
+.alert{padding:12px 16px;border-radius:6px;margin-bottom:16px}
+.alert-success{background:#14532d;border:1px solid #16a34a}
+.alert-warning{background:#713f12;border:1px solid #ca8a04}
+</style>
+</head>
+<body>
+<div class="sidebar">
+<h1>ocserv-panel</h1>
+<a href="/">控制台</a>
+<a href="/sessions">在线会话</a>
+<a href="/groups">用户组管理</a>
+<a href="/ocserv">Ocserv 设置</a>
+<a href="/radius" class="active">RADIUS 设置</a>
+<a href="/certs">证书管理</a>
+<a href="/monitor">节点监控</a>
+<a href="/settings">面板设置</a>
+<a href="/logs">实时日志</a>
+<a href="/logout">退出登录</a>
+</div>
+<div class="main">
+<h2 style="margin-bottom:20px;color:#38bdf8;">RADIUS 设置</h2>
+<div class="card">
+<h2>RADIUS 服务器配置</h2>
+<form action="/radius/save" method="POST">
+<div class="row">
+<div class="col"><label>服务器地址（IP 或域名）</label><input type="text" name="host" value="{{.Radius.Host}}" placeholder="如 10.0.0.5 或 radius.example.com" required></div>
+<div class="col"><label>认证端口</label><input type="number" name="port" value="{{.Radius.Port}}" min="1" max="65535" placeholder="1812"></div>
+<div class="col"><label>计费端口</label><input type="number" name="acct_port" value="{{.Radius.AcctPort}}" min="1" max="65535" placeholder="1813"></div>
+</div>
+<label>共享密钥</label>
+<input type="text" name="secret" value="{{.Radius.Secret}}" placeholder="共享密钥（必须与 RADIUS 服务端一致）" required>
+<button type="submit" class="btn btn-primary">保存并重载</button>
+</form>
+</div>
+<div class="card">
+<h2>测试 RADIUS 连接</h2>
+<p style="margin-bottom:16px;color:#94a3b8;">输入要测试的账号密码，点击测试。使用真实账号可以验证认证是否通过。</p>
+<div class="row">
+<div class="col"><label>测试用户名</label><input type="text" id="test-user" placeholder="如 user01"></div>
+<div class="col"><label>测试密码</label><input type="text" id="test-pass" placeholder="如 password123"></div>
+</div>
+<button class="btn btn-success" onclick="testRadius()">测试连接</button>
+<div id="test-result" style="margin-top:16px;"></div>
+</div>
+<div class="card">
+<h2>当前配置文件</h2>
+<table>
+<tr><th>主配置文件</th><td>/etc/radiusclient/radiusclient.conf</td></tr>
+<tr><th>服务器定义</th><td>/etc/radiusclient/servers</td></tr>
+<tr><th>字典文件</th><td>/etc/radiusclient/dictionary</td></tr>
+</table>
+</div>
+<div class="card">
+<h2>ocserv 支持的 RADIUS 属性</h2>
+<p style="margin-bottom:12px;color:#94a3b8;">当 <code>groupconfig=true</code> 时，ocserv 从 RADIUS Access-Accept 回复中读取以下属性：</p>
+<table>
+<tr><th>属性</th><th>用途</th></tr>
+<tr><td>Framed-IP-Address</td><td>为用户分配指定 VPN IP</td></tr>
+<tr><td>Framed-Route</td><td>向客户端推送路由</td></tr>
+<tr><td>Session-Timeout</td><td>最大会话时长（秒）</td></tr>
+<tr><td>Idle-Timeout</td><td>空闲自动断开（秒）</td></tr>
+<tr><td>Acct-Interim-Interval</td><td>计费更新频率</td></tr>
+<tr><td>Class (OU=)</td><td>分配用户到组</td></tr>
+<tr><td>Reply-Message</td><td>向用户显示消息</td></tr>
+</table>
+<p style="margin-top:12px;color:#94a3b8;">Class 属性中的组名用于 RADIUS 下发组策略，不使用本地 config-per-group 文件。</p>
+</div>
+</div>
+<script>
+function testRadius(){
+var btn=event.target;btn.disabled=true;btn.textContent='测试中...';
+document.getElementById('test-result').innerHTML='';
+var user=document.getElementById('test-user').value||'testuser';
+var pass=document.getElementById('test-pass').value||'testpass';
+fetch('/radius/test?user='+encodeURIComponent(user)+'&pass='+encodeURIComponent(pass))
+.then(function(r){return r.json()})
+.then(function(data){
+var result=data.result||'无响应';
+var isSuccess=result.indexOf('Access-Accept')>=0;
+var isReject=result.indexOf('Access-Reject')>=0;
+var cls=isSuccess?'alert-success':'alert-warning';
+document.getElementById('test-result').innerHTML='<div class="alert '+cls+'"><pre>'+result+'</pre></div>';
+btn.disabled=false;btn.textContent='测试连接';
+})
+.catch(function(err){
+document.getElementById('test-result').innerHTML='<div class="alert alert-warning">错误: '+err+'</div>';
+btn.disabled=false;btn.textContent='测试连接';
+});
+}
+</script>
+</body>
+</html>

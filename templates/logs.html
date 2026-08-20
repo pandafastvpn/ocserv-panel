@@ -1,0 +1,78 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>ocserv-panel - 实时日志</title>
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;background:#0f172a;color:#e2e8f0}
+.sidebar{position:fixed;left:0;top:0;width:240px;height:100vh;background:#1e293b;border-right:1px solid #334155;padding:20px 0;overflow-y:auto}
+.sidebar h1{font-size:18px;text-align:center;margin-bottom:30px;color:#38bdf8}
+.sidebar a{display:block;padding:12px 24px;color:#94a3b8;text-decoration:none;transition:all .2s}
+.sidebar a:hover{background:#334155;color:#e2e8f0}
+.sidebar a.active{background:#0ea5e9;color:#fff}
+.main{margin-left:240px;padding:30px;min-height:100vh}
+.card{background:#1e293b;border:1px solid #334155;border-radius:8px;padding:24px;margin-bottom:20px}
+.card h2{font-size:18px;margin-bottom:16px;color:#38bdf8}
+.btn{display:inline-block;padding:6px 16px;border:none;border-radius:6px;font-size:13px;cursor:pointer;margin-right:8px;margin-bottom:8px}
+.btn-primary{background:#0ea5e9;color:#fff}
+pre{background:#0f172a;padding:16px;border-radius:6px;color:#4ade80;overflow-x:auto;font-size:13px;white-space:pre-wrap;max-height:500px;overflow-y:auto}
+</style>
+</head>
+<body>
+<div class="sidebar">
+<h1>ocserv-panel</h1>
+<a href="/">控制台</a>
+<a href="/sessions">在线会话</a>
+<a href="/groups">用户组管理</a>
+<a href="/ocserv">Ocserv 设置</a>
+<a href="/radius">RADIUS 设置</a>
+<a href="/certs">证书管理</a>
+<a href="/monitor">节点监控</a>
+<a href="/settings">面板设置</a>
+<a href="/logs" class="active">实时日志</a>
+<a href="/logout">退出登录</a>
+</div>
+<div class="main">
+<h2 style="margin-bottom:20px;color:#38bdf8;">实时日志与诊断</h2>
+<div class="card">
+<h2>选择查看内容</h2>
+<button class="btn btn-primary" onclick="loadLog('configtest')">配置检测</button>
+<button class="btn btn-primary" onclick="loadLog('logs')">ocserv 日志</button>
+<button class="btn btn-primary" onclick="loadLog('conf')">ocserv.conf</button>
+<button class="btn btn-primary" onclick="loadLog('radius')">radiusclient.conf</button>
+<button class="btn btn-primary" onclick="loadLog('radius_servers')">servers 文件</button>
+<button class="btn btn-primary" onclick="loadLog('dictionary')">字典文件</button>
+<button class="btn btn-primary" onclick="loadLog('config_json')">config.json</button>
+</div>
+<div class="card">
+<h2 id="log-title">点击上方按钮查看</h2>
+<pre id="log-output">点击上方按钮查看对应内容...</pre>
+</div>
+</div>
+<script>
+var titles={
+'configtest':'ocserv 配置检测 (ocserv -t)',
+'logs':'ocserv 最近 50 行日志',
+'conf':'/etc/ocserv/ocserv.conf',
+'radius':'/etc/radiusclient/radiusclient.conf',
+'radius_servers':'/etc/radiusclient/servers',
+'dictionary':'/etc/radiusclient/dictionary',
+'config_json':'/opt/ocserv-panel/data/config.json'
+};
+function loadLog(type){
+document.getElementById('log-title').textContent=titles[type]||type;
+document.getElementById('log-output').textContent='加载中...';
+fetch('/logs/json?type='+type)
+.then(function(r){return r.json()})
+.then(function(data){
+document.getElementById('log-output').textContent=data.output||'无内容';
+})
+.catch(function(err){
+document.getElementById('log-output').textContent='加载失败: '+err;
+});
+}
+</script>
+</body>
+</html>

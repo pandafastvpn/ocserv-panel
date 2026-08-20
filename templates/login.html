@@ -1,0 +1,32 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>ocserv-panel 登录</title>
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;background:#0f172a;color:#e2e8f0;display:flex;justify-content:center;align-items:center;min-height:100vh}
+.login-box{background:#1e293b;border:1px solid #334155;border-radius:12px;padding:40px;width:380px}
+.login-box h1{text-align:center;color:#38bdf8;margin-bottom:30px}
+.login-box label{display:block;margin-bottom:6px;font-size:14px;color:#94a3b8}
+.login-box input{width:100%;padding:10px 14px;background:#0f172a;border:1px solid #334155;border-radius:6px;color:#e2e8f0;font-size:14px;margin-bottom:16px}
+.login-box button{width:100%;padding:10px;background:#0ea5e9;color:#fff;border:none;border-radius:6px;font-size:15px;cursor:pointer}
+.login-box button:hover{background:#0284c7}
+.error{color:#f87171;text-align:center;margin-bottom:16px;font-size:14px}
+</style>
+</head>
+<body>
+<div class="login-box">
+<h1>ocserv-panel</h1>
+{{if .Error}}<div class="error">{{.Error}}</div>{{end}}
+<form method="POST" action="/login">
+<label>用户名</label>
+<input type="text" name="username" required autofocus>
+<label>密码</label>
+<input type="password" name="password" required>
+<button type="submit">登录</button>
+</form>
+</div>
+</body>
+</html>

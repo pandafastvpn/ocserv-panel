@@ -1,0 +1,96 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>ocserv-panel - Ocserv 设置</title>
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;background:#0f172a;color:#e2e8f0}
+.sidebar{position:fixed;left:0;top:0;width:240px;height:100vh;background:#1e293b;border-right:1px solid #334155;padding:20px 0;overflow-y:auto}
+.sidebar h1{font-size:18px;text-align:center;margin-bottom:30px;color:#38bdf8}
+.sidebar a{display:block;padding:12px 24px;color:#94a3b8;text-decoration:none;transition:all .2s}
+.sidebar a:hover{background:#334155;color:#e2e8f0}
+.sidebar a.active{background:#0ea5e9;color:#fff}
+.main{margin-left:240px;padding:30px;min-height:100vh}
+.card{background:#1e293b;border:1px solid #334155;border-radius:8px;padding:24px;margin-bottom:20px}
+.card h2{font-size:18px;margin-bottom:16px;color:#38bdf8}
+.btn{display:inline-block;padding:8px 20px;border:none;border-radius:6px;font-size:14px;cursor:pointer}
+.btn-primary{background:#0ea5e9;color:#fff}
+table{width:100%;border-collapse:collapse}
+table th,table td{padding:10px 12px;text-align:left;border-bottom:1px solid #334155;font-size:14px}
+table th{color:#94a3b8;font-weight:600}
+form label{display:block;margin-bottom:6px;font-size:14px;color:#94a3b8}
+form input{width:100%;padding:8px 12px;background:#0f172a;border:1px solid #334155;border-radius:6px;color:#e2e8f0;font-size:14px;margin-bottom:16px}
+form .checkbox-row{display:flex;align-items:center;gap:8px;margin-bottom:16px}
+form .checkbox-row input{width:auto;margin:0}
+form .checkbox-row label{margin:0}
+.row{display:flex;gap:20px}.col{flex:1}
+pre{background:#0f172a;padding:12px;border-radius:6px;color:#4ade80;overflow-x:auto;font-size:13px}
+code{background:#0f172a;padding:2px 6px;border-radius:4px;font-size:13px;color:#4ade80}
+.alert{padding:12px 16px;border-radius:6px;margin-bottom:16px;background:#0c4a6e;border:1px solid #0ea5e9}
+</style>
+</head>
+<body>
+<div class="sidebar">
+<h1>ocserv-panel</h1>
+<a href="/">控制台</a>
+<a href="/sessions">在线会话</a>
+<a href="/groups">用户组管理</a>
+<a href="/ocserv" class="active">Ocserv 设置</a>
+<a href="/radius">RADIUS 设置</a>
+<a href="/certs">证书管理</a>
+<a href="/monitor">节点监控</a>
+<a href="/settings">面板设置</a>
+<a href="/logs">实时日志</a>
+<a href="/logout">退出登录</a>
+</div>
+<div class="main">
+<h2 style="margin-bottom:20px;color:#38bdf8;">Ocserv 设置</h2>
+<div class="card">
+<h2>VPN 服务器配置</h2>
+<form action="/ocserv/save" method="POST">
+<div class="row">
+<div class="col"><label>TCP 端口</label><input type="number" name="tcp_port" value="{{.Settings.TcpPort}}" min="1" max="65535"></div>
+<div class="col"><label>UDP 端口</label><input type="number" name="udp_port" value="{{.Settings.UdpPort}}" min="1" max="65535"></div>
+</div>
+<div class="row">
+<div class="col"><label>最大客户端数</label><input type="number" name="max_clients" value="{{.Settings.MaxClients}}" min="1"></div>
+<div class="col"><label>每用户最大连接数</label><input type="number" name="max_same_clients" value="{{.Settings.MaxSameClients}}" min="1"></div>
+</div>
+<div class="row">
+<div class="col"><label>VPN 网段 (IPv4)</label><input type="text" name="vpn_network" value="{{.Settings.VPNNetwork}}" placeholder="192.168.99.0"></div>
+<div class="col"><label>子网掩码</label><input type="text" name="vpn_netmask" value="{{.Settings.VPNNetmask}}" placeholder="255.255.255.0"></div>
+</div>
+<label>DNS 服务器（空格分隔）</label>
+<input type="text" name="dns" value="{{.Settings.DNS}}" placeholder="8.8.8.8 1.1.1.1">
+<label>默认路由</label>
+<input type="text" name="route" value="{{.Settings.Route}}" placeholder="default 或 10.0.0.0/8 192.168.0.0/16">
+<label>TUN 设备名</label>
+<input type="text" name="device" value="{{.Settings.Device}}" placeholder="vpns">
+<label>流量上报间隔（秒，用于 RADIUS 计费）</label>
+<input type="number" name="stats_report" value="{{.Settings.StatsReport}}" min="60" placeholder="300">
+<div class="checkbox-row">
+<input type="checkbox" name="tunnel_all_dns" {{if .Settings.TunnelAllDNS}}checked{{end}}>
+<label>DNS 全部走隧道（所有 DNS 查询通过 VPN 转发）</label>
+</div>
+<button type="submit" class="btn btn-primary">保存并重载</button>
+</form>
+</div>
+<div class="card">
+<h2>RADIUS 认证说明</h2>
+<div class="alert">
+<p>本节点通过 RADIUS 进行认证和计费，关键配置：</p>
+<pre>auth = "radius[config=/etc/radiusclient/radiusclient.conf]"
+acct = "radius[config=/etc/radiusclient/radiusclient.conf]"
+stats-report-time = {{.Settings.StatsReport}}
+select-group = user
+config-per-group = /etc/ocserv/config-per-group</pre>
+<p style="margin-top:10px;">RADIUS 负责认证，组策略由本地文件管理（<a href="/groups" style="color:#38bdf8;">用户组管理</a>）。</p>
+<p style="margin-top:10px;"><code>select-group = user</code> 允许用户在连接时通过 <code>用户名@组名</code> 选择组，应用对应的限速、路由、DNS 策略。</p>
+<p style="margin-top:10px;"><code>stats-report-time</code> 控制 ocserv 发送 RADIUS Interim-Update 计费包的频率，包含流量统计信息。</p>
+</div>
+</div>
+</div>
+</body>
+</html>

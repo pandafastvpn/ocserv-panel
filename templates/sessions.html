@@ -1,0 +1,70 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>ocserv-panel - 在线会话</title>
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;background:#0f172a;color:#e2e8f0}
+.sidebar{position:fixed;left:0;top:0;width:240px;height:100vh;background:#1e293b;border-right:1px solid #334155;padding:20px 0;overflow-y:auto}
+.sidebar h1{font-size:18px;text-align:center;margin-bottom:30px;color:#38bdf8}
+.sidebar a{display:block;padding:12px 24px;color:#94a3b8;text-decoration:none;transition:all .2s}
+.sidebar a:hover{background:#334155;color:#e2e8f0}
+.sidebar a.active{background:#0ea5e9;color:#fff}
+.main{margin-left:240px;padding:30px;min-height:100vh}
+.card{background:#1e293b;border:1px solid #334155;border-radius:8px;padding:24px;margin-bottom:20px}
+.card h2{font-size:18px;margin-bottom:16px;color:#38bdf8}
+.btn{display:inline-block;padding:8px 20px;border:none;border-radius:6px;font-size:14px;cursor:pointer;text-decoration:none}
+.btn-primary{background:#0ea5e9;color:#fff}.btn-danger{background:#dc2626;color:#fff}
+.btn-sm{padding:4px 12px;font-size:12px}
+table{width:100%;border-collapse:collapse}
+table th,table td{padding:10px 12px;text-align:left;border-bottom:1px solid #334155;font-size:14px}
+table th{color:#94a3b8;font-weight:600}
+</style>
+</head>
+<body>
+<div class="sidebar">
+<h1>ocserv-panel</h1>
+<a href="/">控制台</a>
+<a href="/sessions" class="active">在线会话</a>
+<a href="/groups">用户组管理</a>
+<a href="/ocserv">Ocserv 设置</a>
+<a href="/radius">RADIUS 设置</a>
+<a href="/certs">证书管理</a>
+<a href="/monitor">节点监控</a>
+<a href="/settings">面板设置</a>
+<a href="/logs">实时日志</a>
+<a href="/logout">退出登录</a>
+</div>
+<div class="main">
+<h2 style="margin-bottom:20px;color:#38bdf8;">在线会话</h2>
+<div class="card">
+<h2>已连接用户 <button class="btn btn-primary btn-sm" style="float:right;" onclick="loadSessions()">刷新</button></h2>
+<table>
+<thead><tr><th>用户名</th><th>ID</th><th>客户端 IP</th><th>VPN IP</th><th>连接时间</th><th>上行</th><th>下行</th><th>时长</th><th>操作</th></tr></thead>
+<tbody id="sessions-body">
+<tr><td colspan="9" style="text-align:center;color:#94a3b8;">加载中...</td></tr>
+</tbody>
+</table>
+</div>
+</div>
+<script>
+function loadSessions(){
+fetch('/sessions/json').then(r=>r.json()).then(function(data){
+var tbody=document.getElementById('sessions-body');
+if(!data||data.length===0){
+tbody.innerHTML='<tr><td colspan="9" style="text-align:center;color:#94a3b8;">暂无在线用户</td></tr>';return;
+}
+tbody.innerHTML=data.map(function(u){
+var name=u.username||u.Username||'-';
+return '<tr><td>'+name+'</td><td>'+(u.id||u.ID||'-')+'</td><td>'+(u.ip||u.IP||'-')+'</td><td>'+(u.vpn_ip||u.VPNIP||'-')+'</td><td>'+(u.since||u.Since||'-')+'</td><td>'+(u.rx_bytes||u.RxBytes||'-')+'</td><td>'+(u.tx_bytes||u.TxBytes||'-')+'</td><td>'+(u.duration||u.Duration||'-')+'</td><td><a href="/sessions/disconnect?user='+encodeURIComponent(name)+'" class="btn btn-danger btn-sm" onclick="return confirm(\'确定断开该用户？\')">断开</a></td></tr>';
+}).join('');
+}).catch(function(err){
+document.getElementById('sessions-body').innerHTML='<tr><td colspan="9" style="text-align:center;color:#f87171;">加载失败: '+err+'</td></tr>';
+});
+}
+loadSessions();setInterval(loadSessions,5000);
+</script>
+</body>
+</html>

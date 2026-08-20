@@ -1,0 +1,81 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>ocserv-panel - 节点监控</title>
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;background:#0f172a;color:#e2e8f0}
+.sidebar{position:fixed;left:0;top:0;width:240px;height:100vh;background:#1e293b;border-right:1px solid #334155;padding:20px 0;overflow-y:auto}
+.sidebar h1{font-size:18px;text-align:center;margin-bottom:30px;color:#38bdf8}
+.sidebar a{display:block;padding:12px 24px;color:#94a3b8;text-decoration:none;transition:all .2s}
+.sidebar a:hover{background:#334155;color:#e2e8f0}
+.sidebar a.active{background:#0ea5e9;color:#fff}
+.main{margin-left:240px;padding:30px;min-height:100vh}
+.card{background:#1e293b;border:1px solid #334155;border-radius:8px;padding:24px;margin-bottom:20px}
+.card h2{font-size:18px;margin-bottom:16px;color:#38bdf8}
+.stats-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:20px;margin-bottom:20px}
+.stat-box{background:#1e293b;border:1px solid #334155;border-radius:8px;padding:20px;text-align:center}
+.stat-box .label{font-size:13px;color:#94a3b8;margin-bottom:8px}
+.stat-box .value{font-size:28px;font-weight:700;color:#38bdf8}
+.stat-box .status-running{color:#4ade80}
+.stat-box .status-stopped{color:#f87171}
+table{width:100%;border-collapse:collapse}
+table th,table td{padding:10px 12px;text-align:left;border-bottom:1px solid #334155;font-size:14px}
+table th{color:#94a3b8;font-weight:600}
+.alert{padding:12px 16px;border-radius:6px;margin-bottom:16px;background:#0c4a6e;border:1px solid #0ea5e9}
+</style>
+</head>
+<body>
+<div class="sidebar">
+<h1>ocserv-panel</h1>
+<a href="/">控制台</a>
+<a href="/sessions">在线会话</a>
+<a href="/groups">用户组管理</a>
+<a href="/ocserv">Ocserv 设置</a>
+<a href="/radius">RADIUS 设置</a>
+<a href="/certs">证书管理</a>
+<a href="/monitor" class="active">节点监控</a>
+<a href="/settings">面板设置</a>
+<a href="/logout">退出登录</a>
+</div>
+<div class="main">
+<h2 style="margin-bottom:20px;color:#38bdf8;">节点监控</h2>
+<div class="stats-grid">
+<div class="stat-box"><div class="label">VPN 服务</div><div class="value" id="mon-status" style="font-size:20px;">--</div></div>
+<div class="stat-box"><div class="label">在线用户</div><div class="value" id="mon-users">--</div></div>
+<div class="stat-box"><div class="label">CPU 使用率</div><div class="value" id="mon-cpu" style="font-size:20px;">--</div></div>
+<div class="stat-box"><div class="label">内存</div><div class="value" id="mon-mem" style="font-size:20px;">--</div></div>
+</div>
+<div class="card">
+<h2>流量统计</h2>
+<table>
+<tr><th>总下载</th><td id="mon-rx">--</td></tr>
+<tr><th>总上传</th><td id="mon-tx">--</td></tr>
+<tr><th>系统运行时间</th><td id="mon-uptime">--</td></tr>
+</table>
+</div>
+<div class="card">
+<div class="alert"><p>本页面每 10 秒自动刷新。</p></div>
+</div>
+</div>
+<script>
+function loadMonitor(){
+fetch('/monitor/json').then(r=>r.json()).then(function(data){
+var status=data.status||'unknown';
+var el=document.getElementById('mon-status');
+if(status==='running'){el.textContent='运行中';el.className='value status-running';}
+else{el.textContent='已停止';el.className='value status-stopped';}
+document.getElementById('mon-users').textContent=data.total_users!==undefined?data.total_users:0;
+document.getElementById('mon-cpu').textContent=data.cpu_usage||'N/A';
+document.getElementById('mon-mem').textContent=data.mem_usage||'N/A';
+document.getElementById('mon-rx').textContent=data.total_rx||'N/A';
+document.getElementById('mon-tx').textContent=data.total_tx||'N/A';
+document.getElementById('mon-uptime').textContent=data.uptime||'N/A';
+}).catch(function(err){console.error('监控加载失败:',err)});
+}
+loadMonitor();setInterval(loadMonitor,10000);
+</script>
+</body>
+</html>
