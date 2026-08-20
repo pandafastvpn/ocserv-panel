@@ -1,0 +1,22 @@
+# Binaries
+ocserv-panel
+*.exe
+*.dll
+*.so
+*.dylib
+
+# Go
+vendor/
+
+# Data
+data/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
