@@ -1,38 +1,43 @@
-# ocserv-panel
+# Ocserv-面板
 
-A lightweight one-click installer and web panel for **ocserv (OpenConnect VPN server)** with **RADIUS authentication and accounting** support.
 
-Designed for **Debian 12**, built with **Go**, zero external dependencies. No Nginx, no PHP, no database — just a single binary.
+一个轻量级的一键安装ocserv+radius客户端并带管理面板，适用于ocserv（OpenConnect VPN服务器），支持本地和RADIUS认证、计费。
 
-## What This Is
+只在Debian 12测试 ，使用 Go 构建，零外部依赖。无需Nginx、PHP、数据库，只有一个二进制文件。
+## 关于
 
-This is a **VPN node panel** — it runs on each ocserv server and lets you:
+这是一个VPN节点面板，在面板可以做到以下功能：
 
-- Configure ocserv settings (ports, VPN network, DNS, routes)
-- Manage user groups with per-group speed limits, session timeouts, routes
-- Configure RADIUS server connection (host, port, shared secret)
-- Upload TLS certificates
-- View online sessions and disconnect users
-- Monitor node health (CPU, memory, traffic stats)
-- Start/stop/reload ocserv service
 
-It is **not** a billing system or sales platform. It is the **node-side management tool** that connects to your central RADIUS server (e.g. ToughRADIUS) for authentication and accounting.
 
-## Quick Install (Debian 12)
+- 配置ocserv设置（端口、VPN网络、DNS、路由）
+- 管理用户组，按组速度限制、会话超时、路由
+- 配置RADIUS服务器连接（主机、端口、共享秘密）
+- 上传TLS证书
+- 查看连接用户并可以断开某个用户的连接
+- 监控节点健康状况（CPU、内存、流量统计）
+- 启动/停止/重新加载ocserv服务
+
+它不是一个计费系统或销售平台。可以连接到你中央RADIUS服务器（例如ToughRADIUS）进行认证和计费。
+
+
+
+## 快速安装 (Debian 12)
 
 ```bash
-git clone https://github.com/yourname/ocserv-panel.git
+apt update && apt install git sudo -y
+git clone https://github.com/pandafastvpn/ocserv-panel.git
 cd ocserv-panel
 sudo bash install.sh
 ```
 
-Custom settings:
+也可以自定义安装:
 
 ```bash
 sudo PANEL_PORT=8443 PANEL_USER=admin PANEL_PASS=yourpass bash install.sh
 ```
 
-After installation, open `https://your-server-ip:8443` in your browser.
+安装完成后，在浏览器中打开。 `https://your-server-ip:8443` i
 
 ## Important: Fix Windows Line Endings
 
@@ -44,23 +49,26 @@ sed -i 's/\r$//' templates/*.html
 sudo bash install.sh
 ```
 
-## What Gets Installed
+## 安装内容
 
 | Component | Path |
 |-----------|------|
-| Panel binary | `/opt/ocserv-panel/ocserv-panel` |
-| Panel config | `/opt/ocserv-panel/data/config.json` |
+| 管理面板 | `/opt/ocserv-panel/ocserv-panel` |
+| 面板配置	 | `/opt/ocserv-panel/data/config.json` |
 | ocserv config | `/etc/ocserv/ocserv.conf` |
-| Group configs | `/etc/ocserv/config-per-group/` |
-| RADIUS client config | `/etc/radiusclient/radiusclient.conf` |
-| RADIUS servers | `/etc/radiusclient/servers` |
-| TLS certificate | `/etc/ocserv/server-cert.pem` |
-| TLS key | `/etc/ocserv/server-key.pem` |
-| Systemd service | `/etc/systemd/system/ocserv-panel.service` |
+| 群组设置 | `/etc/ocserv/config-per-group/` |
+| RADIUS 客户端配置 | `/etc/radiusclient/radiusclient.conf` |
+| RADIUS 服务端连接插件| `/etc/radiusclient/servers` |
+| TLS证书	e | `/etc/ocserv/server-cert.pem` |
+| TLS 密匙| `/etc/ocserv/server-key.pem` |
+| Systemd 服务| `/etc/systemd/system/ocserv-panel.service` |
 
-## RADIUS Configuration
+## RADIUS 配置
 
-The installer configures ocserv with:
+
+安装程序会默认以下方式配置ocserv：
+
+
 
 ```
 auth = "radius[config=/etc/radiusclient/radiusclient.conf,groupconfig=true]"
@@ -68,22 +76,23 @@ acct = "radius[config=/etc/radiusclient/radiusclient.conf]"
 stats-report-time = 300
 ```
 
-- `auth` — RADIUS authentication
-- `acct` — RADIUS accounting (Start/Stop/Interim-Update with traffic stats)
-- `groupconfig=true` — reads group policies from RADIUS reply attributes
-- `stats-report-time = 300` — sends interim accounting every 5 minutes with `Acct-Input-Octets` and `Acct-Output-Octets`
+- `auth` — RADIUS认证
+- `acct` — RADIUS计费（含流量统计的开始/停止/临时更新）
+- `groupconfig=true` — 从 RADIUS 回复属性读取组策略
+- `stats-report-time = 300` — 每5分钟发送一次临时账目，并且 `Acct-Input-Octets`  `Acct-Output-Octets`
 
-### Connecting to ToughRADIUS
+### 连接ToughRADIUS
 
-1. Install ToughRADIUS on your central server
-2. Open ocserv-panel → **RADIUS Settings**
-3. Set ToughRADIUS server IP, auth port (1812), acct port (1813), shared secret
-4. Save — ocserv reloads automatically
-5. Add this ocserv node as a NAS client in ToughRADIUS with the same shared secret
 
-## Speed Limit Reference
+1. 在你的服务器上安装ToughRADIUS（安装具体看https://github.com/talkincode/toughradius）
+2. 打开 安装后ocserv面板 → RADIUS 设置
+3. 设置ToughRADIUS服务器IP、认证端口（1812）、账户端口（1813）、共享秘密
+4. 保存
+5. 在ToughRADIUS中添加这个ocserv节点作为NAS客户端，使用相同的共享秘密
 
-| Speed | bytes/sec |
+## 限速参考
+
+| 速度 | 字节/秒 |
 |-------|-----------|
 | 1 Mbps | 125000 |
 | 5 Mbps | 625000 |
@@ -91,21 +100,23 @@ stats-report-time = 300
 | 50 Mbps | 6250000 |
 | 100 Mbps | 12500000 |
 
-## Managing Groups
+## 管理组
 
-Groups are stored as files in `/etc/ocserv/config-per-group/`. Each file supports:
 
-- `rx-data-per-sec` — download speed limit
-- `tx-data-per-sec` — upload speed limit
-- `session-timeout` — max session duration
-- `idle-timeout` — auto-disconnect when idle
-- `dns` — per-group DNS servers
-- `route` / `no-route` — per-group routing
-- `max-same-clients` — concurrent connections per user
+组以文件形式存储在 `/etc/ocserv/config-per-group/`。每个文件支持：
 
-Users are assigned to groups via the RADIUS `Class` attribute (e.g. `OU=premium`).
+- `rx-data-per-sec` — 下载速度限制
+- `tx-data-per-sec` — 上传速度限制
+- `session-timeout` — 最大会话时长
+- `idle-timeout` — 空闲自动断开
+- `dns` — 群组DNS服务器
+- `route` / `no-route` — 群组路由或排除路由
+- `max-same-clients` — 每个用户的并发连接
 
-## Useful Commands
+用户可以通过 RADIUS 的`Class` 属性连接到群组（例如  `OU=premium`).
+
+## 实用命令
+
 
 ```bash
 systemctl start ocserv         # Start VPN
@@ -141,11 +152,12 @@ journalctl -u ocserv-panel -f  # View panel logs
 └────────┘  └────────┘  └────────┘
 ```
 
-## Requirements
+## 要求
+
 
 - Debian 12 (Bookworm)
-- Root access
-- Public IP or port forwarding for TCP/UDP 443
+- Root a用户
+- TCP/UDP 443 的公共 IP 或端口转发
 
 ## License
 
