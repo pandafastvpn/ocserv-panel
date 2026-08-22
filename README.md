@@ -37,17 +37,9 @@ sudo bash install.sh
 sudo PANEL_PORT=8443 PANEL_USER=admin PANEL_PASS=yourpass bash install.sh
 ```
 
-安装完成后，在浏览器中打开。 `https://your-server-ip:8443` i
+安装完成后，在浏览器中打开。 `https://your-server-ip:8443` 
 
-## Important: Fix Windows Line Endings
 
-If you cloned on Windows and uploaded to Linux, fix CRLF before running:
-
-```bash
-sed -i 's/\r$//' install.sh main.go go.mod
-sed -i 's/\r$//' templates/*.html
-sudo bash install.sh
-```
 
 ## 安装内容
 
