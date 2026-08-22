@@ -30,11 +30,13 @@ form input{width:100%;padding:8px 12px;background:#0f172a;border:1px solid #3341
 <a href="/">控制台</a>
 <a href="/sessions">在线会话</a>
 <a href="/groups">用户组管理</a>
+<a href="/users">本地用户</a>
 <a href="/ocserv">Ocserv 设置</a>
 <a href="/radius">RADIUS 设置</a>
 <a href="/certs">证书管理</a>
 <a href="/monitor">节点监控</a>
 <a href="/settings" class="active">面板设置</a>
+<a href="/logs">实时日志</a>
 <a href="/logout">退出登录</a>
 </div>
 <div class="main">
@@ -51,6 +53,14 @@ form input{width:100%;padding:8px 12px;background:#0f172a;border:1px solid #3341
 <input type="password" name="password" value="{{.Pass}}" required>
 <label>面板端口</label>
 <input type="number" name="port" value="{{.Port}}" min="1" max="65535" required>
+<label>NAS 标识（多台 ocserv 必填，建议唯一）</label>
+<input type="text" name="nas_identifier" value="{{.NasIdentifier}}" placeholder="如 ocserv-bj-1">
+<label>认证方式</label>
+<select name="auth_mode" style="width:100%;padding:8px 12px;background:#0f172a;border:1px solid #334155;border-radius:6px;color:#e2e8f0;font-size:14px;margin-bottom:16px">
+<option value="radius" {{if eq .AuthMode "radius"}}selected{{end}}>FreeRADIUS</option>
+<option value="local" {{if eq .AuthMode "local"}}selected{{end}}>ocserv 本地用户</option>
+</select>
+<p style="color:#94a3b8;font-size:13px;margin-bottom:16px">切换认证方式后会自动更新 ocserv.conf 并重启 ocserv。本地用户在“本地用户”页面管理。</p>
 <button type="submit" class="btn btn-primary">保存设置</button>
 </form>
 </div>
@@ -59,7 +69,8 @@ form input{width:100%;padding:8px 12px;background:#0f172a;border:1px solid #3341
 <p style="color:#94a3b8;font-size:14px;line-height:1.8;">
 - 修改端口后面板会自动重启，请用新端口访问<br>
 - 修改密码后需要重新登录<br>
-- 如果改了端口忘记了，可以通过 SSH 执行：<code>cat /opt/ocserv-panel/data/config.json</code> 查看
+- 如果改了端口忘记了，可以通过 SSH 执行：<code>cat /opt/ocserv-panel/data/config.json</code> 查看<br>
+- NAS 标识用于让 FreeRADIUS 区分多台 ocserv，建议每台机器都设置不同值
 </p>
 </div>
 </div>

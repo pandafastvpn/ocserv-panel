@@ -37,6 +37,7 @@ code{background:#0f172a;padding:2px 6px;border-radius:4px;font-size:13px;color:#
 <a href="/">控制台</a>
 <a href="/sessions">在线会话</a>
 <a href="/groups">用户组管理</a>
+<a href="/users">本地用户</a>
 <a href="/ocserv" class="active">Ocserv 设置</a>
 <a href="/radius">RADIUS 设置</a>
 <a href="/certs">证书管理</a>
@@ -59,8 +60,28 @@ code{background:#0f172a;padding:2px 6px;border-radius:4px;font-size:13px;color:#
 <div class="col"><label>每用户最大连接数</label><input type="number" name="max_same_clients" value="{{.Settings.MaxSameClients}}" min="1"></div>
 </div>
 <div class="row">
-<div class="col"><label>VPN 网段 (IPv4)</label><input type="text" name="vpn_network" value="{{.Settings.VPNNetwork}}" placeholder="192.168.99.0"></div>
+<div class="col"><label>VPN 网段 (IPv4)</label><input type="text" name="vpn_network" value="{{.Settings.VPNNetwork}}" placeholder="10.0.0.0"></div>
 <div class="col"><label>子网掩码</label><input type="text" name="vpn_netmask" value="{{.Settings.VPNNetmask}}" placeholder="255.255.255.0"></div>
+</div>
+<div class="row">
+<div class="col"><label>认证超时（秒）</label><input type="number" name="auth_timeout" value="{{.Settings.AuthTimeout}}" min="30" placeholder="240"></div>
+<div class="col"><label>Cookie 超时（秒）</label><input type="number" name="cookie_timeout" value="{{.Settings.CookieTimeout}}" min="60" placeholder="60"></div>
+</div>
+<div class="row">
+<div class="col"><label>DPD 间隔（秒）</label><input type="number" name="dpd" value="{{.Settings.DPD}}" min="10" placeholder="60"></div>
+<div class="col"><label>移动端 DPD（秒）</label><input type="number" name="mobile_dpd" value="{{.Settings.MobileDPD}}" min="10" placeholder="180"></div>
+</div>
+<div class="row">
+<div class="col"><label>重协商时间（秒）</label><input type="number" name="rekey_time" value="{{.Settings.RekeyTime}}" min="0" placeholder="172800"></div>
+<div class="col"><label>切换到 TCP 超时（秒）</label><input type="number" name="switch_to_tcp_timeout" value="{{.Settings.SwitchToTCPTimeout}}" min="0" placeholder="25"></div>
+</div>
+<div class="row">
+<div class="col"><label>Keepalive（秒）</label><input type="number" name="keepalive" value="{{.Settings.Keepalive}}" min="0" placeholder="32400"></div>
+<div class="col"><label>最大封禁分数</label><input type="number" name="max_ban_score" value="{{.Settings.MaxBanScore}}" min="0" placeholder="80"></div>
+</div>
+<div class="row">
+<div class="col"><label>封禁重置时间（秒）</label><input type="number" name="ban_reset_time" value="{{.Settings.BanResetTime}}" min="0" placeholder="1200"></div>
+<div class="col"><label>流量上报间隔（秒，用于 RADIUS 计费）</label><input type="number" name="stats_report" value="{{.Settings.StatsReport}}" min="30" placeholder="300"></div>
 </div>
 <label>DNS 服务器（空格分隔）</label>
 <input type="text" name="dns" value="{{.Settings.DNS}}" placeholder="8.8.8.8 1.1.1.1">
@@ -68,8 +89,6 @@ code{background:#0f172a;padding:2px 6px;border-radius:4px;font-size:13px;color:#
 <input type="text" name="route" value="{{.Settings.Route}}" placeholder="default 或 10.0.0.0/8 192.168.0.0/16">
 <label>TUN 设备名</label>
 <input type="text" name="device" value="{{.Settings.Device}}" placeholder="vpns">
-<label>流量上报间隔（秒，用于 RADIUS 计费）</label>
-<input type="number" name="stats_report" value="{{.Settings.StatsReport}}" min="60" placeholder="300">
 <div class="checkbox-row">
 <input type="checkbox" name="tunnel_all_dns" {{if .Settings.TunnelAllDNS}}checked{{end}}>
 <label>DNS 全部走隧道（所有 DNS 查询通过 VPN 转发）</label>
@@ -81,13 +100,10 @@ code{background:#0f172a;padding:2px 6px;border-radius:4px;font-size:13px;color:#
 <h2>RADIUS 认证说明</h2>
 <div class="alert">
 <p>本节点通过 RADIUS 进行认证和计费，关键配置：</p>
-<pre>auth = "radius[config=/etc/radiusclient/radiusclient.conf]"
-acct = "radius[config=/etc/radiusclient/radiusclient.conf]"
-stats-report-time = {{.Settings.StatsReport}}
-select-group = user
-config-per-group = /etc/ocserv/config-per-group</pre>
-<p style="margin-top:10px;">RADIUS 负责认证，组策略由本地文件管理（<a href="/groups" style="color:#38bdf8;">用户组管理</a>）。</p>
-<p style="margin-top:10px;"><code>select-group = user</code> 允许用户在连接时通过 <code>用户名@组名</code> 选择组，应用对应的限速、路由、DNS 策略。</p>
+<pre>auth = "radius[config=/etc/radiusclient/radiusclient.conf,groupconfig=true,nas-identifier={{.NasIdentifier}}]"
+acct = "radius[config=/etc/radiusclient/radiusclient.conf,nas-identifier={{.NasIdentifier}}]"
+stats-report-time = {{.Settings.StatsReport}}</pre>
+<p style="margin-top:10px;">RADIUS 负责认证和计费，组/会话属性由 FreeRADIUS 返回（例如 <code>Class</code>、<code>Session-Timeout</code>、<code>Idle-Timeout</code>、<code>Framed-Route</code>）。</p>
 <p style="margin-top:10px;"><code>stats-report-time</code> 控制 ocserv 发送 RADIUS Interim-Update 计费包的频率，包含流量统计信息。</p>
 </div>
 </div>

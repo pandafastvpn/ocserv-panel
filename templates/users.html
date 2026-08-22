@@ -1,0 +1,55 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>ocserv-panel - 本地用户</title>
+<style>
+*{margin:0;padding:0;box-sizing:border-box}body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;background:#0f172a;color:#e2e8f0}.sidebar{position:fixed;left:0;top:0;width:240px;height:100vh;background:#1e293b;border-right:1px solid #334155;padding:20px 0;overflow-y:auto}.sidebar h1{font-size:18px;text-align:center;margin-bottom:30px;color:#38bdf8}.sidebar a{display:block;padding:12px 24px;color:#94a3b8;text-decoration:none}.sidebar a.active,.sidebar a:hover{background:#0ea5e9;color:#fff}.main{margin-left:240px;padding:30px}.card{background:#1e293b;border:1px solid #334155;border-radius:8px;padding:24px;margin-bottom:20px}.card h2{font-size:18px;margin-bottom:16px;color:#38bdf8}label{display:block;margin-bottom:6px;color:#94a3b8}input[type=text],input[type=password],input[type=number],select{width:100%;padding:8px 12px;margin-bottom:16px;background:#0f172a;border:1px solid #334155;border-radius:6px;color:#e2e8f0;font-size:14px}.group-checkboxes{display:flex;flex-wrap:wrap;gap:10px;margin-bottom:16px}.group-checkboxes label{display:inline-flex;align-items:center;gap:6px;padding:8px 14px;background:#0f172a;border:1px solid #334155;border-radius:6px;color:#e2e8f0;cursor:pointer}.group-checkboxes label:hover{border-color:#0ea5e9}.group-checkboxes input{width:auto;margin:0}.btn{padding:8px 20px;border:0;border-radius:6px;background:#0ea5e9;color:#fff;cursor:pointer}.danger{background:#dc2626}table{width:100%;border-collapse:collapse}th,td{text-align:left;padding:10px;border-bottom:1px solid #334155}.alert{padding:12px 16px;background:#0c4a6e;border:1px solid #0ea5e9;border-radius:6px;margin-bottom:16px}code{color:#4ade80}
+</style>
+</head>
+<body>
+<div class="sidebar">
+<h1>ocserv-panel</h1>
+<a href="/">控制台</a>
+<a href="/sessions">在线会话</a>
+<a href="/groups">用户组管理</a>
+<a href="/users" class="active">本地用户</a>
+<a href="/ocserv">Ocserv 设置</a>
+<a href="/radius">RADIUS 设置</a>
+<a href="/certs">证书管理</a>
+<a href="/monitor">节点监控</a>
+<a href="/settings">面板设置</a>
+<a href="/logs">实时日志</a>
+<a href="/logout">退出登录</a>
+</div>
+<div class="main">
+<h2 style="margin-bottom:20px;color:#38bdf8">本地用户</h2>
+<div class="card">
+<div class="alert">本地认证使用 <code>/etc/ocserv/ocpasswd</code>。请先在“面板设置”将认证方式切换为“ocserv 本地用户”。</div>
+<h2>添加或修改用户</h2>
+<form action="/users/save" method="POST">
+<label>用户名</label>
+<input type="text" name="username" required pattern="[a-zA-Z0-9_-]+">
+<label>密码</label>
+<input type="password" name="password" required>
+<label>用户组（可多选）</label>
+<div class="group-checkboxes">
+{{if .Groups}}{{range .Groups}}
+<label><input type="checkbox" name="group" value="{{.Name}}"> {{.DisplayName}}</label>
+{{end}}{{else}}
+<label><input type="checkbox" name="group" value="default" checked> default</label>
+{{end}}
+</div>
+<button class="btn" type="submit">保存用户</button>
+</form>
+</div>
+<div class="card">
+<h2>现有用户</h2>
+<table>
+<tr><th>用户名</th><th>用户组</th><th>操作</th></tr>
+{{if .Users}}{{range splitLines .Users}}{{if .}}<tr><td>{{index (splitColon .) 0}}</td><td>{{index (splitColon .) 1}}</td><td><a class="btn danger" href="/users/delete?username={{index (splitColon .) 0}}" onclick="return confirm('确定删除？')">删除</a></td></tr>{{end}}{{end}}{{else}}<tr><td colspan="3">暂无本地用户</td></tr>{{end}}
+</table>
+</div>
+</div>
+</body></html>
