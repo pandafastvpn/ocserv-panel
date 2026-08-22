@@ -19,6 +19,7 @@ set -euo pipefail
 
 VERSION="1.0.0"
 GO_VERSION="1.23.4"
+OCSERV_VERSION="1.5.0"
 
 # Colors
 RED='\033[0;31m'
@@ -47,7 +48,7 @@ export SCRIPT_DIR
 PANEL_PORT="${PANEL_PORT:-8443}"
 PANEL_USER="${PANEL_USER:-admin}"
 PANEL_PASS="${PANEL_PASS:-admin123}"
-VPN_NETWORK="${VPN_NETWORK:-192.168.99.0}"
+VPN_NETWORK="${VPN_NETWORK:-10.0.0.0}"
 VPN_NETMASK="${VPN_NETMASK:-255.255.255.0}"
 
 INSTALL_DIR="/opt/ocserv-panel"
@@ -72,7 +73,7 @@ echo ""
 # ============================================================
 # 1. System dependencies
 # ============================================================
-step "1/8 Installing system dependencies..."
+step "1/9 Installing system dependencies..."
 
 export DEBIAN_FRONTEND=noninteractive
 
@@ -108,6 +109,25 @@ apt-get install -y \
     procps \
     gnutls-bin \
     lsof \
+    build-essential \
+    meson \
+    ninja-build \
+    pkg-config \
+    libgnutls28-dev \
+    libev-dev \
+    libreadline-dev \
+    libtasn1-bin \
+    libpam0g-dev \
+    liblz4-dev \
+    libseccomp-dev \
+    libnl-route-3-dev \
+    libkrb5-dev \
+    libradcli-dev \
+    liboath-dev \
+    libprotobuf-c-dev \
+    protobuf-c-compiler \
+    libtalloc-dev \
+    gperf \
     2>&1 | tail -10
 
 # occtl is included in the ocserv package on Debian
@@ -119,9 +139,70 @@ fi
 info "System dependencies installed."
 
 # ============================================================
-# 2. Install Go
+# 2. Build ocserv from source
 # ============================================================
-step "2/8 Checking Go installation..."
+step "2/9 Building ocserv ${OCSERV_VERSION} from source..."
+
+OCSERV_TARBALL="ocserv-${OCSERV_VERSION}.tar.xz"
+cd /tmp
+if [ ! -f "${OCSERV_TARBALL}" ]; then
+    info "Downloading ocserv ${OCSERV_VERSION} source..."
+    wget -q --timeout=120 "https://www.infradead.org/ocserv/download/${OCSERV_TARBALL}" -O "${OCSERV_TARBALL}" || {
+        error "Failed to download ocserv source. Check: https://www.infradead.org/ocserv/download/"
+        exit 1
+    }
+fi
+
+rm -rf "ocserv-${OCSERV_VERSION}"
+tar -xf "${OCSERV_TARBALL}" || {
+    error "Failed to extract ocserv source."
+    exit 1
+}
+
+cd "ocserv-${OCSERV_VERSION}"
+info "Running meson setup (RADIUS/PAM/seccomp/LZ4 enabled)..."
+meson setup build \
+    --prefix=/usr \
+    --sysconfdir=/etc \
+    --localstatedir=/var \
+    -Dpam=enabled \
+    -Dradius=enabled \
+    -Dseccomp=enabled \
+    -Dlz4=enabled \
+    -Dlibnl=enabled \
+    -Dgssapi=disabled \
+    -Doidc-auth=disabled \
+    -Dfirewall-script=iptables || {
+    error "meson setup failed."
+    exit 1
+}
+
+info "Compiling (this may take several minutes)..."
+ninja -C build || {
+    error "ocserv build failed."
+    exit 1
+}
+
+info "Installing ocserv to /usr (overrides apt version)..."
+ninja -C build install || {
+    error "ocserv install failed."
+    exit 1
+}
+
+cd /tmp
+rm -rf "ocserv-${OCSERV_VERSION}" "${OCSERV_TARBALL}"
+
+if command -v ocserv >/dev/null 2>&1; then
+    info "ocserv version: $(ocserv --version 2>/dev/null | head -1)"
+else
+    warn "ocserv binary not found in PATH after build."
+fi
+info "ocserv ${OCSERV_VERSION} built and installed."
+
+# ============================================================
+# 3. Install Go
+# ============================================================
+step "3/9 Checking Go installation..."
 
 NEED_GO=true
 if command -v go >/dev/null 2>&1; then
@@ -176,7 +257,7 @@ export GOPROXY=https://goproxy.cn,direct
 # ============================================================
 # 3. Directories
 # ============================================================
-step "3/8 Creating directories..."
+step "4/9 Creating directories..."
 
 mkdir -p "$INSTALL_DIR"
 mkdir -p "$TEMPLATE_DIR/static"
@@ -191,7 +272,7 @@ info "Directories created."
 # ============================================================
 # 4. Copy source files
 # ============================================================
-step "4/8 Copying source files..."
+step "5/9 Copying source files..."
 
 # Use SCRIPT_DIR from the top of the script, but also try fallbacks
 if [ ! -f "${SCRIPT_DIR}/main.go" ]; then
@@ -249,7 +330,7 @@ info "Source files copied."
 # ============================================================
 # 5. Build the panel
 # ============================================================
-step "5/8 Building ocserv-panel..."
+step "6/9 Building ocserv-panel..."
 
 cd "$INSTALL_DIR"
 
@@ -258,7 +339,7 @@ cd "$INSTALL_DIR"
 find . -type f \( -name '*.go' -o -name '*.mod' -o -name '*.sum' -o -name '*.html' -o -name '*.css' -o -name '*.js' \) \
     -exec sed -i 's/\r$//' {} + 2>/dev/null || true
 
-info "Running go mod tidy..." +#+#+#+#+#+ to=functions.StrReplace ＿奇米影视 招商总代្យ 天天中彩票可以玩彩神争霸  福利彩票天天彩jsonեց{
+info "Running go mod tidy..."
 export CGO_ENABLED=0
 go mod tidy 2>&1 || true
 
@@ -275,7 +356,7 @@ info "Panel binary built: ${INSTALL_DIR}/ocserv-panel"
 # ============================================================
 # 6. Generate self-signed certificate
 # ============================================================
-step "6/8 Generating TLS certificate..."
+step "7/9 Generating TLS certificate..."
 
 if [ ! -f "${CERT_DIR}/server-cert.pem" ]; then
     info "Generating self-signed certificate..."
@@ -313,7 +394,7 @@ fi
 # ============================================================
 # 7. Generate configs
 # ============================================================
-step "7/8 Generating configuration files..."
+step "8/9 Generating configuration files..."
 
 # --- Panel config ---
 # Always regenerate config.json to ensure paths are correct
@@ -328,6 +409,7 @@ cat > "${DATA_DIR}/config.json" <<EOJSON
   "radius_servers": "/etc/radiusclient/servers",
   "group_dir": "/etc/ocserv/config-per-group",
   "cert_dir": "/etc/ocserv",
+  "nas_identifier": "$(hostname -s)",
   "default_if": "$(ip route show default 2>/dev/null | awk '{print $5}' | head -1 || echo eth0)",
   "vpn_network": "${VPN_NETWORK}",
   "vpn_netmask": "${VPN_NETMASK}",
@@ -344,7 +426,7 @@ authserver localhost:1812
 acctserver localhost:1813
 servers /etc/radiusclient/servers
 dictionary /etc/radiusclient/dictionary
-radius_timeout 10
+radius_timeout 5
 radius_retries 3
 EOF
 
@@ -542,8 +624,8 @@ max-same-clients = 2
 rate-limit-ms = 100
 try-mtu-discovery = true
 keepalive = 32400
-dpd = 90
-mobile-dpd = 1800
+dpd = 60
+mobile-dpd = 180
 switch-to-tcp-timeout = 25
 
 # === TLS ===
@@ -553,7 +635,7 @@ tls-priorities = "NORMAL:%SERVER_PRECEDENCE:%COMPAT:-VERS-SSL3.0:-VERS-TLS1.0:-V
 
 # === Timeouts ===
 auth-timeout = 240
-cookie-timeout = 300
+cookie-timeout = 60
 deny-roaming = false
 rekey-time = 172800
 rekey-method = ssl
@@ -576,8 +658,8 @@ dns = 8.8.8.8
 route = default
 
 # === Per-group config ===
-# FreeRADIUS 会通过 Class = OU=组名 下发用户所属组
-config-per-group = ${GROUP_DIR}
+# FreeRADIUS 控制组/会话策略，通过返回的 Class / Session-Timeout / Idle-Timeout 等属性下发。
+# 本地 config-per-group 在当前 ocserv 版本会与 radius supplemental config 冲突，因此不启用。
 
 # === Cisco compat ===
 cisco-client-compat = true
@@ -643,7 +725,7 @@ info "Systemd services configured."
 # ============================================================
 # 8. Start services
 # ============================================================
-step "8/8 Starting services..."
+step "9/9 Starting services..."
 
 # Enable IP forwarding
 echo 1 > /proc/sys/net/ipv4/ip_forward
@@ -690,7 +772,7 @@ else
     warn ""
     warn "Common causes:"
     warn "  1. TLS certificate missing or invalid -> check /etc/ocserv/server-cert.pem"
-    warn "  2. RADIUS config file not found -> check /etc/radiusclient/radiusclient.conf"
+    warn "  2. RADIUS config file not found -> check /etc/radiusclient/radiusclient.conf and /etc/radiusclient/servers"
     warn "  3. RADIUS dictionary missing -> run: cp /usr/share/radiusclient/dictionary* /etc/radiusclient/"
     warn "  4. Port 443 already in use -> run: ss -tlnp | grep 443"
 fi

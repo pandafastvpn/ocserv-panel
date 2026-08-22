@@ -25,19 +25,22 @@ import (
 // ============================================================
 
 type AppConfig struct {
-	PanelPort   int    `json:"panel_port"`
-	PanelUser   string `json:"panel_user"`
-	PanelPass   string `json:"panel_pass"`
-	PanelSecret string `json:"panel_secret"`
-	OcservConf  string `json:"ocserv_conf"`
-	RadiusConf  string `json:"radius_conf"`
-	RadiusServ  string `json:"radius_servers"`
-	GroupDir    string `json:"group_dir"`
-	CertDir     string `json:"cert_dir"`
-	DefaultIF   string `json:"default_if"`
-	VPNNetwork  string `json:"vpn_network"`
-	VPNNetmask  string `json:"vpn_netmask"`
-	TunDevice   string `json:"tun_device"`
+	PanelPort     int    `json:"panel_port"`
+	PanelUser     string `json:"panel_user"`
+	PanelPass     string `json:"panel_pass"`
+	PanelSecret   string `json:"panel_secret"`
+	OcservConf    string `json:"ocserv_conf"`
+	RadiusConf    string `json:"radius_conf"`
+	RadiusServ    string `json:"radius_servers"`
+	AuthMode      string `json:"auth_mode"`
+	LocalPasswd   string `json:"local_passwd"`
+	GroupDir      string `json:"group_dir"`
+	CertDir       string `json:"cert_dir"`
+	NasIdentifier string `json:"nas_identifier"`
+	DefaultIF     string `json:"default_if"`
+	VPNNetwork    string `json:"vpn_network"`
+	VPNNetmask    string `json:"vpn_netmask"`
+	TunDevice     string `json:"tun_device"`
 }
 
 type GroupConfig struct {
@@ -54,10 +57,11 @@ type GroupConfig struct {
 }
 
 type RadiusServer struct {
-	Host     string `json:"host"`
-	Port     int    `json:"port"`
-	Secret   string `json:"secret"`
-	AcctPort int    `json:"acct_port"`
+	Host         string `json:"host"`
+	Port         int    `json:"port"`
+	Secret       string `json:"secret"`
+	AcctPort     int    `json:"acct_port"`
+	NasIdentifier string `json:"nas_identifier"`
 }
 
 type SessionInfo struct {
@@ -83,17 +87,26 @@ type ServerStatus struct {
 }
 
 type OcservSettings struct {
-	TcpPort        int    `json:"tcp_port"`
-	UdpPort        int    `json:"udp_port"`
-	MaxClients     int    `json:"max_clients"`
-	MaxSameClients int    `json:"max_same_clients"`
-	VPNNetwork     string `json:"vpn_network"`
-	VPNNetmask     string `json:"vpn_netmask"`
-	DNS            string `json:"dns"`
-	Route          string `json:"route"`
-	Device         string `json:"device"`
-	StatsReport    int    `json:"stats_report"`
-	TunnelAllDNS   bool   `json:"tunnel_all_dns"`
+	TcpPort             int    `json:"tcp_port"`
+	UdpPort             int    `json:"udp_port"`
+	MaxClients          int    `json:"max_clients"`
+	MaxSameClients      int    `json:"max_same_clients"`
+	VPNNetwork          string `json:"vpn_network"`
+	VPNNetmask          string `json:"vpn_netmask"`
+	DNS                 string `json:"dns"`
+	Route               string `json:"route"`
+	Device              string `json:"device"`
+	StatsReport         int    `json:"stats_report"`
+	TunnelAllDNS        bool   `json:"tunnel_all_dns"`
+	AuthTimeout         int    `json:"auth_timeout"`
+	CookieTimeout       int    `json:"cookie_timeout"`
+	DPD                 int    `json:"dpd"`
+	MobileDPD           int    `json:"mobile_dpd"`
+	RekeyTime           int    `json:"rekey_time"`
+	SwitchToTCPTimeout   int    `json:"switch_to_tcp_timeout"`
+	Keepalive           int    `json:"keepalive"`
+	MaxBanScore         int    `json:"max_ban_score"`
+	BanResetTime        int    `json:"ban_reset_time"`
 }
 
 // ============================================================
@@ -154,8 +167,10 @@ func setConfig(cfg *AppConfig) {
 // ============================================================
 
 var tplFuncs = template.FuncMap{
-	"htmlattr": func(s string) template.HTMLAttr { return template.HTMLAttr(s) },
-	"rawhtml":  func(s string) template.HTML { return template.HTML(s) },
+	"htmlattr":    func(s string) template.HTMLAttr { return template.HTMLAttr(s) },
+	"rawhtml":     func(s string) template.HTML { return template.HTML(s) },
+	"splitLines":  func(s string) []string { return strings.Split(s, "\n") },
+	"splitColon":  func(s string) []string { return strings.SplitN(s, ":", 3) },
 }
 
 func renderPage(w http.ResponseWriter, page string, data interface{}) {
@@ -233,6 +248,9 @@ func main() {
 	mux.HandleFunc("/monitor/json", authMiddleware(handleMonitorJSON))
 	mux.HandleFunc("/settings", authMiddleware(handleSettings))
 	mux.HandleFunc("/settings/save", authMiddleware(handleSettingsSave))
+	mux.HandleFunc("/users", authMiddleware(handleLocalUsers))
+	mux.HandleFunc("/users/save", authMiddleware(handleLocalUserSave))
+	mux.HandleFunc("/users/delete", authMiddleware(handleLocalUserDelete))
 	mux.HandleFunc("/logs", authMiddleware(handleLogs))
 	mux.HandleFunc("/logs/json", authMiddleware(handleLogsJSON))
 	mux.HandleFunc("/ocserv/start", authMiddleware(handleOcservStart))
@@ -368,10 +386,12 @@ func getOcservErrorLog() string {
 // ============================================================
 
 func handleOcservSettings(w http.ResponseWriter, r *http.Request) {
+	cfg := getConfig()
 	settings := readOcservSettings()
 	data := map[string]interface{}{
-		"Active":   "ocserv",
-		"Settings": settings,
+		"Active":        "ocserv",
+		"Settings":      settings,
+		"NasIdentifier": cfg.NasIdentifier,
 	}
 	renderPage(w, "ocserv.html", data)
 }
@@ -383,19 +403,43 @@ func handleOcservSave(w http.ResponseWriter, r *http.Request) {
 	}
 	r.ParseForm()
 	settings := OcservSettings{
-		TcpPort:        atoiDefault(r.FormValue("tcp_port"), 443),
-		UdpPort:        atoiDefault(r.FormValue("udp_port"), 443),
-		MaxClients:     atoiDefault(r.FormValue("max_clients"), 1024),
-		MaxSameClients: atoiDefault(r.FormValue("max_same_clients"), 2),
-		VPNNetwork:     r.FormValue("vpn_network"),
-		VPNNetmask:     r.FormValue("vpn_netmask"),
-		DNS:            r.FormValue("dns"),
-		Route:          r.FormValue("route"),
-		Device:         r.FormValue("device"),
-		StatsReport:    atoiDefault(r.FormValue("stats_report"), 300),
-		TunnelAllDNS:   r.FormValue("tunnel_all_dns") == "on",
+		TcpPort:           atoiDefault(r.FormValue("tcp_port"), 443),
+		UdpPort:           atoiDefault(r.FormValue("udp_port"), 443),
+		MaxClients:        atoiDefault(r.FormValue("max_clients"), 1024),
+		MaxSameClients:    atoiDefault(r.FormValue("max_same_clients"), 2),
+		VPNNetwork:        r.FormValue("vpn_network"),
+		VPNNetmask:        r.FormValue("vpn_netmask"),
+		DNS:               r.FormValue("dns"),
+		Route:              r.FormValue("route"),
+		Device:             r.FormValue("device"),
+		StatsReport:       atoiDefault(r.FormValue("stats_report"), 300),
+		TunnelAllDNS:      r.FormValue("tunnel_all_dns") == "on",
+		AuthTimeout:       atoiDefault(r.FormValue("auth_timeout"), 240),
+		CookieTimeout:     atoiDefault(r.FormValue("cookie_timeout"), 60),
+		DPD:               atoiDefault(r.FormValue("dpd"), 60),
+		MobileDPD:         atoiDefault(r.FormValue("mobile_dpd"), 180),
+		RekeyTime:         atoiDefault(r.FormValue("rekey_time"), 172800),
+		SwitchToTCPTimeout: atoiDefault(r.FormValue("switch_to_tcp_timeout"), 25),
+		Keepalive:         atoiDefault(r.FormValue("keepalive"), 32400),
+		MaxBanScore:       atoiDefault(r.FormValue("max_ban_score"), 80),
+		BanResetTime:      atoiDefault(r.FormValue("ban_reset_time"), 1200),
 	}
 	writeOcservSettings(settings)
+
+	// Verify the values written back are consistent with what was submitted.
+	verify := readOcservSettings()
+	if verify.StatsReport != settings.StatsReport ||
+		verify.Keepalive != settings.Keepalive ||
+		verify.DPD != settings.DPD ||
+		verify.MobileDPD != settings.MobileDPD ||
+		verify.CookieTimeout != settings.CookieTimeout ||
+		verify.AuthTimeout != settings.AuthTimeout ||
+		verify.RekeyTime != settings.RekeyTime ||
+		verify.MaxBanScore != settings.MaxBanScore ||
+		verify.BanResetTime != settings.BanResetTime {
+		http.Error(w, "配置写入后回读不一致，请检查 ocserv.conf 是否被其他进程修改", http.StatusInternalServerError)
+		return
+	}
 	http.Redirect(w, r, "/ocserv", http.StatusSeeOther)
 }
 
@@ -404,32 +448,53 @@ func readOcservSettings() OcservSettings {
 	data, _ := os.ReadFile(cfg.OcservConf)
 	content := string(data)
 	return OcservSettings{
-		TcpPort:        getIntFromConfig(content, "tcp-port", 443),
-		UdpPort:        getIntFromConfig(content, "udp-port", 443),
-		MaxClients:     getIntFromConfig(content, "max-clients", 1024),
-		MaxSameClients: getIntFromConfig(content, "max-same-clients", 2),
-		VPNNetwork:     getStrFromConfig(content, "ipv4-network", "192.168.99.0"),
-		VPNNetmask:     getStrFromConfig(content, "ipv4-netmask", "255.255.255.0"),
-		DNS:            getStrFromConfig(content, "dns", "8.8.8.8"),
-		Route:          getStrFromConfig(content, "route", "default"),
-		Device:         getStrFromConfig(content, "device", "vpns"),
-		StatsReport:    getIntFromConfig(content, "stats-report-time", 300),
-		TunnelAllDNS:   strings.Contains(content, "tunnel-all-dns = true"),
+		TcpPort:           getIntFromConfig(content, "tcp-port", 443),
+		UdpPort:           getIntFromConfig(content, "udp-port", 443),
+		MaxClients:        getIntFromConfig(content, "max-clients", 1024),
+		MaxSameClients:    getIntFromConfig(content, "max-same-clients", 2),
+		VPNNetwork:        getStrFromConfig(content, "ipv4-network", "10.0.0.0"),
+		VPNNetmask:        getStrFromConfig(content, "ipv4-netmask", "255.255.255.0"),
+		DNS:               getStrFromConfig(content, "dns", "8.8.8.8"),
+		Route:             getStrFromConfig(content, "route", "default"),
+		Device:            getStrFromConfig(content, "device", "vpns"),
+		StatsReport:       getIntFromConfig(content, "stats-report-time", 300),
+		TunnelAllDNS:      strings.Contains(content, "tunnel-all-dns = true"),
+		AuthTimeout:       getIntFromConfig(content, "auth-timeout", 240),
+		CookieTimeout:     getIntFromConfig(content, "cookie-timeout", 60),
+		DPD:               getIntFromConfig(content, "dpd", 60),
+		MobileDPD:         getIntFromConfig(content, "mobile-dpd", 180),
+		RekeyTime:         getIntFromConfig(content, "rekey-time", 172800),
+		SwitchToTCPTimeout: getIntFromConfig(content, "switch-to-tcp-timeout", 25),
+		Keepalive:         getIntFromConfig(content, "keepalive", 32400),
+		MaxBanScore:       getIntFromConfig(content, "max-ban-score", 80),
+		BanResetTime:      getIntFromConfig(content, "ban-reset-time", 1200),
 	}
 }
 
 func writeOcservSettings(s OcservSettings) {
 	cfg := getConfig()
+	authMethod := fmt.Sprintf("radius[config=%s,groupconfig=true,nas-identifier=%s]", cfg.RadiusConf, cfg.NasIdentifier)
+	if cfg.AuthMode == "local" {
+		authMethod = fmt.Sprintf("plain[passwd=%s]", localPasswdPath(cfg))
+	}
 	tunnelDNS := "false"
 	if s.TunnelAllDNS {
 		tunnelDNS = "true"
+	}
+	routeValue := strings.TrimSpace(s.Route)
+	if routeValue == "" {
+		routeValue = "default"
+	}
+	groupConfig := "# FreeRADIUS supplies group policy through RADIUS attributes."
+	if cfg.AuthMode == "local" {
+		groupConfig = fmt.Sprintf("config-per-group = %s", cfg.GroupDir)
 	}
 	content := fmt.Sprintf(`# ocserv configuration - managed by ocserv-panel
 # Last updated: %s
 
 # RADIUS 认证（FreeRADIUS）
-auth = "radius[config=%s,groupconfig=true,group-separator=semicolon]"
-acct = "radius[config=%s]"
+auth = "%s"
+acct = "radius[config=%s,nas-identifier=%s]"
 # Send Interim-Update records regularly; FreeRADIUS uses these for live usage.
 stats-report-time = %d
 
@@ -444,10 +509,10 @@ max-clients = %d
 max-same-clients = %d
 rate-limit-ms = 100
 try-mtu-discovery = true
-keepalive = 32400
-dpd = 90
-mobile-dpd = 1800
-switch-to-tcp-timeout = 25
+keepalive = %d
+dpd = %d
+mobile-dpd = %d
+switch-to-tcp-timeout = %d
 
 # === TLS ===
 server-cert = %s/server-cert.pem
@@ -455,15 +520,15 @@ server-key = %s/server-key.pem
 tls-priorities = "NORMAL:%%SERVER_PRECEDENCE:%%COMPAT:-VERS-SSL3.0:-VERS-TLS1.0:-VERS-TLS1.1"
 
 # === Timeouts ===
-auth-timeout = 240
-cookie-timeout = 300
+auth-timeout = %d
+cookie-timeout = %d
 deny-roaming = false
-rekey-time = 172800
+rekey-time = %d
 rekey-method = ssl
 
 # === Banning ===
-max-ban-score = 80
-ban-reset-time = 1200
+max-ban-score = %d
+ban-reset-time = %d
 
 # === Network ===
 device = %s
@@ -479,7 +544,7 @@ dns = %s
 route = %s
 
 # === Per-group config ===
-config-per-group = %s
+%s
 
 # === Cisco compat ===
 cisco-client-compat = true
@@ -491,12 +556,17 @@ use-occtl = true
 server-stats-reset-time = 604800
 `,
 		time.Now().Format("2006-01-02 15:04:05"),
-		cfg.RadiusConf, cfg.RadiusConf, s.StatsReport,
+		authMethod, cfg.RadiusConf, cfg.NasIdentifier, s.StatsReport,
 		s.TcpPort, s.UdpPort, s.MaxClients, s.MaxSameClients,
+		s.Keepalive, s.DPD, s.MobileDPD, s.SwitchToTCPTimeout,
 		cfg.CertDir, cfg.CertDir,
+		s.AuthTimeout, s.CookieTimeout, s.RekeyTime,
+		s.MaxBanScore, s.BanResetTime,
 		s.Device, s.VPNNetwork, s.VPNNetmask, tunnelDNS, s.DNS,
-		s.Route, cfg.GroupDir,
+		routeValue, groupConfig,
 	)
+
+	content = strings.ReplaceAll(content, "display-name =", "# display-name =")
 
 	// Ensure default group config exists
 	defaultGroupPath := filepath.Join(cfg.GroupDir, "default")
@@ -797,11 +867,42 @@ func getOnlineUsers() []SessionInfo {
 	if err != nil {
 		return getOnlineUsersText()
 	}
-	var users []SessionInfo
-	if err := json.Unmarshal(output, &users); err != nil {
+
+	var records []map[string]interface{}
+	if err := json.Unmarshal(output, &records); err != nil {
 		return getOnlineUsersText()
 	}
+
+	users := make([]SessionInfo, 0, len(records))
+	for _, record := range records {
+		user := SessionInfo{
+			Username: sessionField(record, "Username", "username", "user"),
+			ID:       sessionField(record, "ID", "id"),
+			IP:       sessionField(record, "Remote IP", "remote_ip", "IP", "ip"),
+			VPNIP:    sessionField(record, "IPv4", "vpn_ip", "VPNIP"),
+			Since:    sessionField(record, "Last connected at", "since", "Since", "Session started at"),
+			RxBytes:  sessionField(record, "RX", "rx_bytes", "RxBytes", "rx"),
+			TxBytes:  sessionField(record, "TX", "tx_bytes", "TxBytes", "tx"),
+			Duration: sessionField(record, "_Last connected at", "duration", "Duration"),
+			State:    sessionField(record, "State", "state"),
+		}
+		if user.Username == "" && user.ID == "" {
+			continue
+		}
+		users = append(users, user)
+	}
 	return users
+}
+
+func sessionField(record map[string]interface{}, keys ...string) string {
+	for _, key := range keys {
+		for actual, value := range record {
+			if strings.EqualFold(actual, key) {
+				return fmt.Sprint(value)
+			}
+		}
+	}
+	return ""
 }
 
 func getOnlineUsersText() []SessionInfo {
@@ -818,12 +919,27 @@ func getOnlineUsersText() []SessionInfo {
 			continue
 		}
 		fields := strings.Fields(line)
+		if len(fields) == 0 || (len(fields) >= 3 && fields[0] == "id" && fields[1] == "user" && fields[2] == "vhost") {
+			continue
+		}
 		if len(fields) >= 3 {
-			users = append(users, SessionInfo{
-				Username: fields[0],
-				ID:       fields[1],
-				IP:       fields[2],
-			})
+			user := SessionInfo{
+				ID:       fields[0],
+				Username: fields[1],
+			}
+			if len(fields) >= 4 {
+				user.IP = fields[3]
+			}
+			if len(fields) >= 5 {
+				user.VPNIP = fields[4]
+			}
+			if len(fields) >= 7 {
+				user.Since = fields[6]
+			}
+			if len(fields) >= 9 {
+				user.State = fields[8]
+			}
+			users = append(users, user)
 		}
 	}
 	return users
@@ -967,25 +1083,13 @@ func getNodeStatus() ServerStatus {
 		s.Status = "stopped"
 	}
 	s.TotalUsers = getOnlineUserCount()
-	cmd := exec.Command("occtl", "-n", "show", "status")
-	output, err := cmd.Output()
-	if err == nil {
-		lines := strings.Split(string(output), "\n")
-		for _, line := range lines {
-			lower := strings.ToLower(line)
-			if strings.Contains(lower, "bytes") && strings.Contains(lower, "rx") {
-				parts := strings.SplitN(line, ":", 2)
-				if len(parts) == 2 {
-					s.TotalRx = strings.TrimSpace(parts[1])
-				}
-			}
-			if strings.Contains(lower, "bytes") && strings.Contains(lower, "tx") {
-				parts := strings.SplitN(line, ":", 2)
-				if len(parts) == 2 {
-					s.TotalTx = strings.TrimSpace(parts[1])
-				}
-			}
-		}
+	if rx, tx, ok := getOcservTraffic(); ok {
+		s.TotalRx = rx
+		s.TotalTx = tx
+	} else {
+		rx, tx := getSystemTraffic()
+		s.TotalRx = rx
+		s.TotalTx = tx
 	}
 	s.CPUUsage = getCPUUsage()
 	s.MemUsage = getMemUsage()
@@ -998,21 +1102,139 @@ func getNodeStatus() ServerStatus {
 }
 
 func getCPUUsage() string {
-	cmd := exec.Command("bash", "-c", "top -bn1 | grep 'Cpu(s)' | awk '{print $2}'")
-	output, err := cmd.Output()
+	data, err := os.ReadFile("/proc/stat")
 	if err != nil {
 		return "N/A"
 	}
-	return strings.TrimSpace(string(output)) + "%"
+	lines := strings.Split(string(data), "\n")
+	for _, line := range lines {
+		if strings.HasPrefix(line, "cpu ") {
+			fields := strings.Fields(line)
+			if len(fields) < 5 {
+				break
+			}
+			var vals []int64
+			for _, f := range fields[1:] {
+				v, err := strconv.ParseInt(f, 10, 64)
+				if err != nil {
+					vals = nil
+					break
+				}
+				vals = append(vals, v)
+			}
+			if len(vals) < 4 {
+				break
+			}
+			idle := vals[3]
+			total := int64(0)
+			for _, v := range vals {
+				total += v
+			}
+			if total <= 0 {
+				break
+			}
+			used := float64(total-idle) / float64(total) * 100
+			return fmt.Sprintf("%.0f%%", used)
+		}
+	}
+	return "N/A"
 }
 
 func getMemUsage() string {
-	cmd := exec.Command("bash", "-c", "free -m | awk '/Mem:/ {printf \"%dMB / %dMB (%.0f%%)\", $3, $2, $3/$2*100}'")
-	output, err := cmd.Output()
+	data, err := os.ReadFile("/proc/meminfo")
 	if err != nil {
 		return "N/A"
 	}
-	return strings.TrimSpace(string(output))
+	var totalKB, availKB int64
+	for _, line := range strings.Split(string(data), "\n") {
+		if strings.HasPrefix(line, "MemTotal:") {
+			fmt.Sscanf(line, "MemTotal: %d kB", &totalKB)
+		}
+		if strings.HasPrefix(line, "MemAvailable:") {
+			fmt.Sscanf(line, "MemAvailable: %d kB", &availKB)
+		}
+	}
+	if totalKB <= 0 {
+		return "N/A"
+	}
+	usedKB := totalKB - availKB
+	usedPct := float64(usedKB) / float64(totalKB) * 100
+	return fmt.Sprintf("%dMB / %dMB (%.0f%%)", usedKB/1024, totalKB/1024, usedPct)
+}
+
+func getOcservTraffic() (string, string, bool) {
+	cmd := exec.Command("occtl", "-n", "show", "status")
+	output, err := cmd.Output()
+	if err != nil {
+		return "", "", false
+	}
+	lines := strings.Split(string(output), "\n")
+	var rx, tx string
+	for _, line := range lines {
+		lower := strings.ToLower(line)
+		if strings.Contains(lower, "bytes") && strings.Contains(lower, "rx") {
+			parts := strings.SplitN(line, ":", 2)
+			if len(parts) == 2 {
+				rx = strings.TrimSpace(parts[1])
+			}
+		}
+		if strings.Contains(lower, "bytes") && strings.Contains(lower, "tx") {
+			parts := strings.SplitN(line, ":", 2)
+			if len(parts) == 2 {
+				tx = strings.TrimSpace(parts[1])
+			}
+		}
+	}
+	if rx == "" && tx == "" {
+		return "", "", false
+	}
+	return rx, tx, true
+}
+
+func getSystemTraffic() (string, string) {
+	data, err := os.ReadFile("/proc/net/dev")
+	if err != nil {
+		return "N/A", "N/A"
+	}
+	var rxBytes, txBytes int64
+	for _, line := range strings.Split(string(data), "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" || strings.HasPrefix(line, "Inter-") || strings.HasPrefix(line, "face") {
+			continue
+		}
+		parts := strings.Split(line, ":")
+		if len(parts) != 2 {
+			continue
+		}
+		fields := strings.Fields(parts[1])
+		if len(fields) < 16 {
+			continue
+		}
+		iface := strings.TrimSpace(parts[0])
+		if iface == "lo" {
+			continue
+		}
+		rx, _ := strconv.ParseInt(fields[0], 10, 64)
+		tx, _ := strconv.ParseInt(fields[8], 10, 64)
+		rxBytes += rx
+		txBytes += tx
+	}
+	return humanBytes(rxBytes), humanBytes(txBytes)
+}
+
+func humanBytes(v int64) string {
+	const unit = 1024
+	if v < unit {
+		return fmt.Sprintf("%dB", v)
+	}
+	d := float64(v)
+	exp := 0
+	for d >= unit && exp < 5 {
+		d /= unit
+		exp++
+	}
+	units := []string{"B", "KB", "MB", "GB", "TB", "PB"}
+	return fmt.Sprintf("%.1f%s", d, units[exp])
 }
 
 // ============================================================
@@ -1089,17 +1311,108 @@ func handleLogsJSON(w http.ResponseWriter, r *http.Request) {
 }
 
 // ============================================================
+// Local ocserv users
+// ============================================================
+
+func handleLocalUsers(w http.ResponseWriter, r *http.Request) {
+	cfg := getConfig()
+	data, _ := os.ReadFile(localPasswdPath(cfg))
+	groups := listGroups(cfg.GroupDir)
+	renderPage(w, "users.html", map[string]interface{}{
+		"Active": "users",
+		"Users":  strings.TrimSpace(string(data)),
+		"Groups": groups,
+	})
+}
+
+func groupNameExists(cfg *AppConfig, name string) bool {
+	if name == "default" {
+		return true
+	}
+	for _, g := range listGroups(cfg.GroupDir) {
+		if g.Name == name {
+			return true
+		}
+	}
+	return false
+}
+
+func handleLocalUserSave(w http.ResponseWriter, r *http.Request) {
+	if r.Method != "POST" {
+		http.Redirect(w, r, "/users", http.StatusSeeOther)
+		return
+	}
+	r.ParseForm()
+	username := strings.TrimSpace(r.FormValue("username"))
+	password := r.FormValue("password")
+	var selectedGroups []string
+	for _, g := range r.Form["group"] {
+		g = strings.TrimSpace(g)
+		if g != "" {
+			selectedGroups = append(selectedGroups, g)
+		}
+	}
+	if !isValidName(username) || password == "" {
+		http.Error(w, "Invalid username or empty password", http.StatusBadRequest)
+		return
+	}
+	cfg := getConfig()
+	if len(selectedGroups) == 0 {
+		selectedGroups = []string{"default"}
+	}
+	for _, g := range selectedGroups {
+		if !groupNameExists(cfg, g) {
+			http.Error(w, "Group does not exist: "+g, http.StatusBadRequest)
+			return
+		}
+	}
+	groupValue := strings.Join(selectedGroups, ",")
+	path := localPasswdPath(cfg)
+	os.MkdirAll(filepath.Dir(path), 0755)
+	cmd := exec.Command("ocpasswd", "-c", path, "-u", username, "-g", groupValue)
+	cmd.Stdin = strings.NewReader(password + "\n" + password + "\n")
+	if err := cmd.Run(); err != nil {
+		http.Error(w, "Failed to create local user", http.StatusInternalServerError)
+		return
+	}
+	os.Chmod(path, 0600)
+	http.Redirect(w, r, "/users", http.StatusSeeOther)
+}
+
+func handleLocalUserDelete(w http.ResponseWriter, r *http.Request) {
+	username := strings.TrimSpace(r.URL.Query().Get("username"))
+	if !isValidName(username) {
+		http.Error(w, "Invalid username", http.StatusBadRequest)
+		return
+	}
+	cfg := getConfig()
+	path := localPasswdPath(cfg)
+	data, _ := os.ReadFile(path)
+	var kept []string
+	for _, line := range strings.Split(string(data), "\n") {
+		if strings.HasPrefix(line, username+":") {
+			continue
+		}
+		kept = append(kept, line)
+	}
+	_ = os.WriteFile(path, []byte(strings.Join(kept, "\n")), 0600)
+	http.Redirect(w, r, "/users", http.StatusSeeOther)
+}
+
+// ============================================================
 // Panel Settings
 // ============================================================
 
 func handleSettings(w http.ResponseWriter, r *http.Request) {
 	cfg := getConfig()
 	data := map[string]interface{}{
-		"Active": "settings",
-		"User":   cfg.PanelUser,
-		"Pass":   cfg.PanelPass,
-		"Port":   cfg.PanelPort,
-		"Saved":  r.URL.Query().Get("saved") == "1",
+		"Active":        "settings",
+		"User":          cfg.PanelUser,
+		"Pass":          cfg.PanelPass,
+		"Port":          cfg.PanelPort,
+		"NasIdentifier": cfg.NasIdentifier,
+		"AuthMode":      cfg.AuthMode,
+		"Saved":         r.URL.Query().Get("saved") == "1",
 	}
 	renderPage(w, "settings.html", data)
 }
@@ -1114,7 +1427,20 @@ func handleSettingsSave(w http.ResponseWriter, r *http.Request) {
 	cfg.PanelUser = r.FormValue("username")
 	cfg.PanelPass = r.FormValue("password")
 	cfg.PanelPort = atoiDefault(r.FormValue("port"), 8443)
+	cfg.NasIdentifier = strings.TrimSpace(r.FormValue("nas_identifier"))
+	if cfg.NasIdentifier == "" {
+		cfg.NasIdentifier = strings.TrimSpace(cfg.DefaultIF)
+	}
+	mode := r.FormValue("auth_mode")
+	if mode != "local" {
+		mode = "radius"
+	}
+	cfg.AuthMode = mode
+	if cfg.LocalPasswd == "" {
+		cfg.LocalPasswd = "/etc/ocserv/ocpasswd"
+	}
 	setConfig(cfg)
+	writeOcservAuthMode(cfg.AuthMode)
 
 	// Restart panel in background
 	go func() {
@@ -1154,6 +1480,38 @@ func handleOcservReload(w http.ResponseWriter, r *http.Request) {
 
 func reloadOcserv() {
 	exec.Command("occtl", "reload").Run()
+}
+
+func localPasswdPath(cfg *AppConfig) string {
+	if cfg.LocalPasswd != "" {
+		return cfg.LocalPasswd
+	}
+	return "/etc/ocserv/ocpasswd"
+}
+
+func writeOcservAuthMode(mode string) {
+	cfg := getConfig()
+	if mode != "local" {
+		mode = "radius"
+	}
+	data, err := os.ReadFile(cfg.OcservConf)
+	if err != nil {
+		return
+	}
+	content := string(data)
+	localAuth := fmt.Sprintf("auth = \"plain[passwd=%s]\"", localPasswdPath(cfg))
+	radiusAuth := fmt.Sprintf("auth = \"radius[config=%s,groupconfig=true,nas-identifier=%s]\"", cfg.RadiusConf, cfg.NasIdentifier)
+	content = strings.Replace(content, localAuth, radiusAuth, 1)
+	content = strings.Replace(content, radiusAuth, localAuth, 1)
+	if mode == "local" {
+		content = strings.ReplaceAll(content, "# FreeRADIUS supplies group policy through RADIUS attributes.", "config-per-group = "+cfg.GroupDir)
+		content = strings.ReplaceAll(content, "# FreeRADIUS supplies group policy through RADIUS attributes.", "")
+	} else {
+		content = strings.Replace(content, localAuth, radiusAuth, 1)
+		content = strings.ReplaceAll(content, "config-per-group = "+cfg.GroupDir, "# FreeRADIUS supplies group policy through RADIUS attributes.")
+	}
+	_ = os.WriteFile(cfg.OcservConf, []byte(content), 0644)
+	exec.Command("systemctl", "restart", "ocserv").Run()
 }
 
 // updateSelectGroup writes group config files and updates ocserv.conf

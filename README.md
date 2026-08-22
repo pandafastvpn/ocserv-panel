@@ -21,7 +21,7 @@ It is **not** a billing system or sales platform. It is the **node-side manageme
 ## Quick Install (Debian 12)
 
 ```bash
-git clone https://github.com/pandafastvpn/ocserv-panel.git
+git clone https://github.com/yourname/ocserv-panel.git
 cd ocserv-panel
 sudo bash install.sh
 ```
