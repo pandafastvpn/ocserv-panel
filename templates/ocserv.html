@@ -89,6 +89,8 @@ code{background:#0f172a;padding:2px 6px;border-radius:4px;font-size:13px;color:#
 <input type="text" name="route" value="{{.Settings.Route}}" placeholder="default 或 10.0.0.0/8 192.168.0.0/16">
 <label>TUN 设备名</label>
 <input type="text" name="device" value="{{.Settings.Device}}" placeholder="vpns">
+<label>客户端配置 XML 文件</label>
+<input type="text" name="xml_config_file" value="{{.Settings.XmlConfigFile}}" placeholder="/etc/ocserv/profile.xml">
 <div class="checkbox-row">
 <input type="checkbox" name="tunnel_all_dns" {{if .Settings.TunnelAllDNS}}checked{{end}}>
 <label>DNS 全部走隧道（所有 DNS 查询通过 VPN 转发）</label>
@@ -103,7 +105,8 @@ code{background:#0f172a;padding:2px 6px;border-radius:4px;font-size:13px;color:#
 <pre>auth = "radius[config=/etc/radiusclient/radiusclient.conf,groupconfig=true,nas-identifier={{.NasIdentifier}}]"
 acct = "radius[config=/etc/radiusclient/radiusclient.conf,nas-identifier={{.NasIdentifier}}]"
 stats-report-time = {{.Settings.StatsReport}}</pre>
-<p style="margin-top:10px;">RADIUS 负责认证和计费，组/会话属性由 FreeRADIUS 返回（例如 <code>Class</code>、<code>Session-Timeout</code>、<code>Idle-Timeout</code>、<code>Framed-Route</code>）。</p>
+<p style="margin-top:10px;">RADIUS 负责认证和计费，<code>Class</code> 用于选择本地 <code>config-per-group</code> 组文件；会话属性也可由 FreeRADIUS 返回，例如 <code>Session-Timeout</code>、<code>Framed-Route</code> 和限速属性。</p>
+<p style="margin-top:10px;">如需给客户端下发 AnyConnect 配置文件，可在这里填写 <code>xml-config-file</code>（例如 <code>/etc/ocserv/profile.xml</code>）。</p>
 <p style="margin-top:10px;"><code>stats-report-time</code> 控制 ocserv 发送 RADIUS Interim-Update 计费包的频率，包含流量统计信息。</p>
 </div>
 </div>
