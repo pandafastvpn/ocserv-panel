@@ -26,7 +26,8 @@
 
 ```bash
 apt update && apt install git sudo -y
-git clone https://github.com/pandafastvpn/ocserv-panel.git
+git clone -b main https://github.com/pandafastvpn/ocserv-panel.git
+git clone -b new https://github.com/pandafastvpn/ocserv-panel.git(二选一，这个版本增加了profile.xml)
 cd ocserv-panel
 sudo bash install.sh
 ```
