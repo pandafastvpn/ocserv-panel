@@ -459,7 +459,7 @@ func readOcservSettings() OcservSettings {
 		DNS:               getStrFromConfig(content, "dns", "8.8.8.8"),
 		Route:             getStrFromConfig(content, "route", "default"),
 		Device:            getStrFromConfig(content, "device", "vpns"),
-		XmlConfigFile:     getStrFromConfig(content, "xml-config-file", "/etc/ocserv/profile.xml"),
+		XmlConfigFile:     getStrFromConfig(content, "user-profile", ""),
 		StatsReport:       getIntFromConfig(content, "stats-report-time", 300),
 		TunnelAllDNS:      strings.Contains(content, "tunnel-all-dns = true"),
 		AuthTimeout:       getIntFromConfig(content, "auth-timeout", 240),
@@ -488,10 +488,16 @@ func writeOcservSettings(s OcservSettings) {
 	if routeValue == "" {
 		routeValue = "default"
 	}
-	groupConfig := fmt.Sprintf("config-per-group = %s", cfg.GroupDir)
+	// config-per-group only works when supplemental config is 'file'. With RADIUS
+	// groupconfig=true this is forbidden; per-user/group policy is read from the
+	// RADIUS reply instead, so the local group files only apply in local mode.
+	groupConfig := ""
+	if cfg.AuthMode == "local" {
+		groupConfig = fmt.Sprintf("config-per-group = %s", cfg.GroupDir)
+	}
 	profileConfig := ""
 	if s.XmlConfigFile != "" {
-		profileConfig = fmt.Sprintf("xml-config-file = %s", s.XmlConfigFile)
+		profileConfig = fmt.Sprintf("user-profile = %s", s.XmlConfigFile)
 	}
 	content := fmt.Sprintf(`# ocserv configuration - managed by ocserv-panel
 # Last updated: %s
@@ -543,7 +549,7 @@ ipv4-netmask = %s
 ping-leases = false
 tunnel-all-dns = %s
 dns = %s
-xml-config-file = %s
+%s
 
 # === Routes ===
 route = %s
@@ -1509,9 +1515,15 @@ func writeOcservAuthMode(mode string) {
 	radiusAuth := fmt.Sprintf("auth = \"radius[config=%s,groupconfig=true,nas-identifier=%s]\"", cfg.RadiusConf, cfg.NasIdentifier)
 	content = strings.Replace(content, localAuth, radiusAuth, 1)
 	content = strings.Replace(content, radiusAuth, localAuth, 1)
-	content = strings.ReplaceAll(content, "# FreeRADIUS supplies group policy through RADIUS attributes.", "config-per-group = "+cfg.GroupDir)
-	if mode != "local" {
-		content = strings.Replace(content, localAuth, radiusAuth, 1)
+	configPerGroupLine := fmt.Sprintf("config-per-group = %s", cfg.GroupDir)
+	if mode == "local" {
+		if !strings.Contains(content, configPerGroupLine) {
+			content += "\n" + configPerGroupLine + "\n"
+		}
+	} else {
+		content = strings.ReplaceAll(content, configPerGroupLine+"\n", "")
+		content = strings.ReplaceAll(content, configPerGroupLine+"\r\n", "")
+		content = strings.ReplaceAll(content, configPerGroupLine, "")
 	}
 	_ = os.WriteFile(cfg.OcservConf, []byte(content), 0644)
 	exec.Command("systemctl", "restart", "ocserv").Run()
