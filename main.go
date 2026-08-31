@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"crypto/rand"
 	"crypto/subtle"
 	"encoding/json"
@@ -96,6 +97,7 @@ type OcservSettings struct {
 	DNS                 string `json:"dns"`
 	Route               string `json:"route"`
 	Device              string `json:"device"`
+	XmlConfigFile       string `json:"xml_config_file"`
 	StatsReport         int    `json:"stats_report"`
 	TunnelAllDNS        bool   `json:"tunnel_all_dns"`
 	AuthTimeout         int    `json:"auth_timeout"`
@@ -411,8 +413,9 @@ func handleOcservSave(w http.ResponseWriter, r *http.Request) {
 		VPNNetmask:        r.FormValue("vpn_netmask"),
 		DNS:               r.FormValue("dns"),
 		Route:              r.FormValue("route"),
-		Device:             r.FormValue("device"),
-		StatsReport:       atoiDefault(r.FormValue("stats_report"), 300),
+		Device:           r.FormValue("device"),
+		XmlConfigFile:    strings.TrimSpace(r.FormValue("xml_config_file")),
+		StatsReport:      atoiDefault(r.FormValue("stats_report"), 300),
 		TunnelAllDNS:      r.FormValue("tunnel_all_dns") == "on",
 		AuthTimeout:       atoiDefault(r.FormValue("auth_timeout"), 240),
 		CookieTimeout:     atoiDefault(r.FormValue("cookie_timeout"), 60),
@@ -457,6 +460,7 @@ func readOcservSettings() OcservSettings {
 		DNS:               getStrFromConfig(content, "dns", "8.8.8.8"),
 		Route:             getStrFromConfig(content, "route", "default"),
 		Device:            getStrFromConfig(content, "device", "vpns"),
+		XmlConfigFile:     getStrFromConfig(content, "user-profile", ""),
 		StatsReport:       getIntFromConfig(content, "stats-report-time", 300),
 		TunnelAllDNS:      strings.Contains(content, "tunnel-all-dns = true"),
 		AuthTimeout:       getIntFromConfig(content, "auth-timeout", 240),
@@ -485,9 +489,16 @@ func writeOcservSettings(s OcservSettings) {
 	if routeValue == "" {
 		routeValue = "default"
 	}
-	groupConfig := "# FreeRADIUS supplies group policy through RADIUS attributes."
+	// config-per-group only works when supplemental config is 'file'. With RADIUS
+	// groupconfig=true this is forbidden; per-user/group policy is read from the
+	// RADIUS reply instead, so the local group files only apply in local mode.
+	groupConfig := ""
 	if cfg.AuthMode == "local" {
 		groupConfig = fmt.Sprintf("config-per-group = %s", cfg.GroupDir)
+	}
+	profileConfig := ""
+	if s.XmlConfigFile != "" {
+		profileConfig = fmt.Sprintf("user-profile = %s", s.XmlConfigFile)
 	}
 	content := fmt.Sprintf(`# ocserv configuration - managed by ocserv-panel
 # Last updated: %s
@@ -539,6 +550,7 @@ ipv4-netmask = %s
 ping-leases = false
 tunnel-all-dns = %s
 dns = %s
+%s
 
 # === Routes ===
 route = %s
@@ -563,7 +575,7 @@ server-stats-reset-time = 604800
 		s.AuthTimeout, s.CookieTimeout, s.RekeyTime,
 		s.MaxBanScore, s.BanResetTime,
 		s.Device, s.VPNNetwork, s.VPNNetmask, tunnelDNS, s.DNS,
-		routeValue, groupConfig,
+		profileConfig, routeValue, groupConfig,
 	)
 
 	content = strings.ReplaceAll(content, "display-name =", "# display-name =")
@@ -585,8 +597,9 @@ func handleGroups(w http.ResponseWriter, r *http.Request) {
 	cfg := getConfig()
 	groups := listGroups(cfg.GroupDir)
 	data := map[string]interface{}{
-		"Active": "groups",
-		"Groups": groups,
+		"Active":   "groups",
+		"Groups":   groups,
+		"AuthMode": cfg.AuthMode,
 	}
 	renderPage(w, "groups.html", data)
 }
@@ -1369,13 +1382,21 @@ func handleLocalUserSave(w http.ResponseWriter, r *http.Request) {
 	groupValue := strings.Join(selectedGroups, ",")
 	path := localPasswdPath(cfg)
 	os.MkdirAll(filepath.Dir(path), 0755)
-	cmd := exec.Command("ocpasswd", "-c", path, "-u", username, "-g", groupValue)
-	cmd.Stdin = strings.NewReader(password + "\n" + password + "\n")
+	// Note: ocpasswd 1.5.0 has no -u <username> option (-u means --unlock).
+	// The username is a positional argument, e.g.:
+	//   ocpasswd -c <file> -g <group> <username>
+	cmd := exec.Command("ocpasswd", "-c", path, "-g", groupValue, username)
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+	// ocpasswd reads a single password line from stdin when not a tty.
+	cmd.Stdin = strings.NewReader(password + "\n")
 	if err := cmd.Run(); err != nil {
-		http.Error(w, "Failed to create local user", http.StatusInternalServerError)
+		http.Error(w, "Failed to create local user: "+strings.TrimSpace(stderr.String()), http.StatusInternalServerError)
 		return
 	}
-	os.Chmod(path, 0600)
+	// ocserv workers run as an unprivileged user (run-as-user = nobody) and
+	// must be able to read the passwd file for plain auth.
+	os.Chmod(path, 0644)
 	http.Redirect(w, r, "/users", http.StatusSeeOther)
 }
 
@@ -1395,7 +1416,7 @@ func handleLocalUserDelete(w http.ResponseWriter, r *http.Request) {
 		}
 		kept = append(kept, line)
 	}
-	_ = os.WriteFile(path, []byte(strings.Join(kept, "\n")), 0600)
+	_ = os.WriteFile(path, []byte(strings.Join(kept, "\n")), 0644)
 	http.Redirect(w, r, "/users", http.StatusSeeOther)
 }
 
@@ -1499,16 +1520,30 @@ func writeOcservAuthMode(mode string) {
 		return
 	}
 	content := string(data)
-	localAuth := fmt.Sprintf("auth = \"plain[passwd=%s]\"", localPasswdPath(cfg))
-	radiusAuth := fmt.Sprintf("auth = \"radius[config=%s,groupconfig=true,nas-identifier=%s]\"", cfg.RadiusConf, cfg.NasIdentifier)
-	content = strings.Replace(content, localAuth, radiusAuth, 1)
-	content = strings.Replace(content, radiusAuth, localAuth, 1)
+	var newAuth string
 	if mode == "local" {
-		content = strings.ReplaceAll(content, "# FreeRADIUS supplies group policy through RADIUS attributes.", "config-per-group = "+cfg.GroupDir)
-		content = strings.ReplaceAll(content, "# FreeRADIUS supplies group policy through RADIUS attributes.", "")
+		newAuth = fmt.Sprintf("plain[passwd=%s]", localPasswdPath(cfg))
 	} else {
-		content = strings.Replace(content, localAuth, radiusAuth, 1)
-		content = strings.ReplaceAll(content, "config-per-group = "+cfg.GroupDir, "# FreeRADIUS supplies group policy through RADIUS attributes.")
+		newAuth = fmt.Sprintf("radius[config=%s,groupconfig=true,nas-identifier=%s]", cfg.RadiusConf, cfg.NasIdentifier)
+	}
+	// Replace whatever auth line exists (exact-match replacement is fragile:
+	// e.g. install.sh writes radius without groupconfig/nas-identifier, so the
+	// old string-replace silently did nothing and the mode never switched).
+	authLineRe := regexp.MustCompile(`(?m)^[ \t]*auth[ \t]*=[ \t]*"[^"\r\n]*"[ \t]*\r?\n`)
+	if authLineRe.MatchString(content) {
+		content = authLineRe.ReplaceAllString(content, fmt.Sprintf("auth = \"%s\"\n", newAuth))
+	} else {
+		content = fmt.Sprintf("auth = \"%s\"\n%s", newAuth, content)
+	}
+	configPerGroupLine := fmt.Sprintf("config-per-group = %s", cfg.GroupDir)
+	if mode == "local" {
+		if !strings.Contains(content, configPerGroupLine) {
+			content += "\n" + configPerGroupLine + "\n"
+		}
+	} else {
+		content = strings.ReplaceAll(content, configPerGroupLine+"\n", "")
+		content = strings.ReplaceAll(content, configPerGroupLine+"\r\n", "")
+		content = strings.ReplaceAll(content, configPerGroupLine, "")
 	}
 	_ = os.WriteFile(cfg.OcservConf, []byte(content), 0644)
 	exec.Command("systemctl", "restart", "ocserv").Run()
