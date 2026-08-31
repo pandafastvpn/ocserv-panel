@@ -1394,7 +1394,9 @@ func handleLocalUserSave(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Failed to create local user: "+strings.TrimSpace(stderr.String()), http.StatusInternalServerError)
 		return
 	}
-	os.Chmod(path, 0600)
+	// ocserv workers run as an unprivileged user (run-as-user = nobody) and
+	// must be able to read the passwd file for plain auth.
+	os.Chmod(path, 0644)
 	http.Redirect(w, r, "/users", http.StatusSeeOther)
 }
 
@@ -1414,7 +1416,7 @@ func handleLocalUserDelete(w http.ResponseWriter, r *http.Request) {
 		}
 		kept = append(kept, line)
 	}
-	_ = os.WriteFile(path, []byte(strings.Join(kept, "\n")), 0600)
+	_ = os.WriteFile(path, []byte(strings.Join(kept, "\n")), 0644)
 	http.Redirect(w, r, "/users", http.StatusSeeOther)
 }
 
@@ -1518,10 +1520,21 @@ func writeOcservAuthMode(mode string) {
 		return
 	}
 	content := string(data)
-	localAuth := fmt.Sprintf("auth = \"plain[passwd=%s]\"", localPasswdPath(cfg))
-	radiusAuth := fmt.Sprintf("auth = \"radius[config=%s,groupconfig=true,nas-identifier=%s]\"", cfg.RadiusConf, cfg.NasIdentifier)
-	content = strings.Replace(content, localAuth, radiusAuth, 1)
-	content = strings.Replace(content, radiusAuth, localAuth, 1)
+	var newAuth string
+	if mode == "local" {
+		newAuth = fmt.Sprintf("plain[passwd=%s]", localPasswdPath(cfg))
+	} else {
+		newAuth = fmt.Sprintf("radius[config=%s,groupconfig=true,nas-identifier=%s]", cfg.RadiusConf, cfg.NasIdentifier)
+	}
+	// Replace whatever auth line exists (exact-match replacement is fragile:
+	// e.g. install.sh writes radius without groupconfig/nas-identifier, so the
+	// old string-replace silently did nothing and the mode never switched).
+	authLineRe := regexp.MustCompile(`(?m)^[ \t]*auth[ \t]*=[ \t]*"[^"\r\n]*"[ \t]*\r?\n`)
+	if authLineRe.MatchString(content) {
+		content = authLineRe.ReplaceAllString(content, fmt.Sprintf("auth = \"%s\"\n", newAuth))
+	} else {
+		content = fmt.Sprintf("auth = \"%s\"\n%s", newAuth, content)
+	}
 	configPerGroupLine := fmt.Sprintf("config-per-group = %s", cfg.GroupDir)
 	if mode == "local" {
 		if !strings.Contains(content, configPerGroupLine) {
