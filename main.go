@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"crypto/rand"
 	"crypto/subtle"
 	"encoding/json"
@@ -1381,10 +1382,16 @@ func handleLocalUserSave(w http.ResponseWriter, r *http.Request) {
 	groupValue := strings.Join(selectedGroups, ",")
 	path := localPasswdPath(cfg)
 	os.MkdirAll(filepath.Dir(path), 0755)
-	cmd := exec.Command("ocpasswd", "-c", path, "-u", username, "-g", groupValue)
-	cmd.Stdin = strings.NewReader(password + "\n" + password + "\n")
+	// Note: ocpasswd 1.5.0 has no -u <username> option (-u means --unlock).
+	// The username is a positional argument, e.g.:
+	//   ocpasswd -c <file> -g <group> <username>
+	cmd := exec.Command("ocpasswd", "-c", path, "-g", groupValue, username)
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+	// ocpasswd reads a single password line from stdin when not a tty.
+	cmd.Stdin = strings.NewReader(password + "\n")
 	if err := cmd.Run(); err != nil {
-		http.Error(w, "Failed to create local user", http.StatusInternalServerError)
+		http.Error(w, "Failed to create local user: "+strings.TrimSpace(stderr.String()), http.StatusInternalServerError)
 		return
 	}
 	os.Chmod(path, 0600)
