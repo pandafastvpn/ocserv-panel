@@ -49,10 +49,13 @@ code{background:#0f172a;padding:2px 6px;border-radius:4px;font-size:13px;color:#
 <div class="card">
 <div class="alert alert-info">
 <p><strong>FreeRADIUS 组策略说明</strong></p>
-<p style="margin-top:8px;">现在使用 FreeRADIUS 认证，ocserv 通过 <code>groupconfig=true</code> 读取 RADIUS 返回的 <code>Class</code> 属性来识别组。</p>
-<p style="margin-top:8px;">请在 FreeRADIUS 里给用户返回 <code>Class = OU=组名</code>，例如 <code>OU=premium</code>，ocserv 会自动套用此页面里同名组的 DNS / 路由 / 限速策略。</p>
-<p style="margin-top:8px;">本页面创建的是 ocserv 的本地组配置文件，用于定义该组的限速、路由、DNS、超时等策略。</p>
-<p style="margin-top:8px;"><strong>注意：</strong>用户连接时不需要手动输入组名；如果 FreeRADIUS 没有下发 Class，用户将使用默认组。</p>
+{{if eq .AuthMode "local"}}
+<p style="margin-top:8px;">当前为 <strong>ocserv 本地用户</strong>模式。用户组策略从 <code>config-per-group</code> 文件读取，限速、路由、DNS 和超时设置会生效。</p>
+<p style="margin-top:8px;"><strong>注意：</strong>本地用户必须属于对应组，并在客户端选择该组。</p>
+{{else}}
+<p style="margin-top:8px;">当前为 <strong>FreeRADIUS</strong> 模式（ocserv.conf 使用 <code>groupconfig=true</code>）。此模式下 ocserv 从 RADIUS 回复读取组策略，本页面保存的本地组限速/DNS/路由文件<strong>不会生效</strong>。</p>
+<p style="margin-top:8px;">请在 FreeRADIUS 里给用户下发策略属性：限速用 <code>RP-Upstream-Speed-Limit</code> / <code>RP-Downstream-Speed-Limit</code>（单位 <strong>kbit/s</strong>），会话超时用 <code>Session-Timeout</code>，组名用 <code>Class = OU=组名</code>。</p>
+{{end}}
 </div>
 </div>
 <div class="card">

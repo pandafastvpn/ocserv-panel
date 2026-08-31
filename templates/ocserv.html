@@ -106,7 +106,7 @@ code{background:#0f172a;padding:2px 6px;border-radius:4px;font-size:13px;color:#
 acct = "radius[config=/etc/radiusclient/radiusclient.conf,nas-identifier={{.NasIdentifier}}]"
 stats-report-time = {{.Settings.StatsReport}}</pre>
 <p style="margin-top:10px;">RADIUS 负责认证和计费，<code>Class</code> 用于选择本地 <code>config-per-group</code> 组文件；会话属性也可由 FreeRADIUS 返回，例如 <code>Session-Timeout</code>、<code>Framed-Route</code> 和限速属性。</p>
-<p style="margin-top:10px;">如需给客户端下发 AnyConnect 配置文件，可在这里填写 <code>xml-config-file</code>（例如 <code>/etc/ocserv/profile.xml</code>）。</p>
+<p style="margin-top:10px;">如需给客户端下发 AnyConnect 配置文件，可在这里填写 <code>user-profile</code>（例如 <code>profile.xml</code>，ocserv 会按相对路径查找；也可写绝对路径）。</p>
 <p style="margin-top:10px;"><code>stats-report-time</code> 控制 ocserv 发送 RADIUS Interim-Update 计费包的频率，包含流量统计信息。</p>
 </div>
 </div>
