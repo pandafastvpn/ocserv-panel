@@ -53,8 +53,9 @@ code{background:#0f172a;padding:2px 6px;border-radius:4px;font-size:13px;color:#
 <p style="margin-top:8px;">当前为 <strong>ocserv 本地用户</strong>模式。用户组策略从 <code>config-per-group</code> 文件读取，限速、路由、DNS 和超时设置会生效。</p>
 <p style="margin-top:8px;"><strong>注意：</strong>本地用户必须属于对应组，并在客户端选择该组。</p>
 {{else}}
-<p style="margin-top:8px;">当前为 <strong>FreeRADIUS</strong> 模式（ocserv.conf 使用 <code>groupconfig=true</code>）。此模式下 ocserv 从 RADIUS 回复读取组策略，本页面保存的本地组限速/DNS/路由文件<strong>不会生效</strong>。</p>
-<p style="margin-top:8px;">请在 FreeRADIUS 里给用户下发策略属性：限速用 <code>RP-Upstream-Speed-Limit</code> / <code>RP-Downstream-Speed-Limit</code>（单位 <strong>kbit/s</strong>），会话超时用 <code>Session-Timeout</code>，组名用 <code>Class = OU=组名</code>。</p>
+<p style="margin-top:8px;">当前为 <strong>FreeRADIUS</strong> 模式。RADIUS 返回的 <code>Class = OU=组名</code> 用来选择组，<strong>本页面生成的同名组文件（限速、DNS、路由、超时）会正常生效</strong>。</p>
+<p style="margin-top:8px;">前提：ocserv.conf 的 auth 行<strong>不要带</strong> <code>groupconfig=true</code>（面板已自动保证），且 FreeRADIUS 给用户返回了对应的 <code>Class</code> 属性。</p>
+<p style="margin-top:8px;">限速单位是 <strong>bytes/sec</strong>（例如 1048576 ≈ 1MB/s）；用户连接时选择的组必须与 <code>Class</code> 返回的组一致。</p>
 {{end}}
 </div>
 </div>
