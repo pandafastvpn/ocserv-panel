@@ -560,7 +560,11 @@ func readOcservSettings() OcservSettings {
 
 func writeOcservSettings(s OcservSettings) {
 	cfg := getConfig()
-	authMethod := fmt.Sprintf("radius[config=%s,groupconfig=true,nas-identifier=%s]", cfg.RadiusConf, cfg.NasIdentifier)
+	// No groupconfig=true: with it, ocserv switches supplemental config to
+	// 'radius' and ignores (or refuses to start with) local config-per-group
+	// files. Without it, RADIUS Class only selects the group and the local
+	// group file (rate limits, DNS, routes) still applies.
+	authMethod := fmt.Sprintf("radius[config=%s,nas-identifier=%s]", cfg.RadiusConf, cfg.NasIdentifier)
 	if cfg.AuthMode == "local" {
 		authMethod = fmt.Sprintf("plain[passwd=%s]", localPasswdPath(cfg))
 	}
@@ -572,13 +576,9 @@ func writeOcservSettings(s OcservSettings) {
 	if routeValue == "" {
 		routeValue = "default"
 	}
-	// config-per-group only works when supplemental config is 'file'. With RADIUS
-	// groupconfig=true this is forbidden; per-user/group policy is read from the
-	// RADIUS reply instead, so the local group files only apply in local mode.
-	groupConfig := ""
-	if cfg.AuthMode == "local" {
-		groupConfig = fmt.Sprintf("config-per-group = %s", cfg.GroupDir)
-	}
+	// Local group files apply in both modes: RADIUS Class picks the group,
+	// config-per-group supplies its policy.
+	groupConfig := fmt.Sprintf("config-per-group = %s", cfg.GroupDir)
 	profileConfig := ""
 	if s.XmlConfigFile != "" {
 		profileConfig = fmt.Sprintf("user-profile = %s", s.XmlConfigFile)
@@ -1607,7 +1607,9 @@ func writeOcservAuthMode(mode string) {
 	if mode == "local" {
 		newAuth = fmt.Sprintf("plain[passwd=%s]", localPasswdPath(cfg))
 	} else {
-		newAuth = fmt.Sprintf("radius[config=%s,groupconfig=true,nas-identifier=%s]", cfg.RadiusConf, cfg.NasIdentifier)
+		// No groupconfig=true — see writeOcservSettings: it would switch
+		// supplemental config to 'radius' and disable local group files.
+		newAuth = fmt.Sprintf("radius[config=%s,nas-identifier=%s]", cfg.RadiusConf, cfg.NasIdentifier)
 	}
 	// Replace whatever auth line exists (exact-match replacement is fragile:
 	// e.g. install.sh writes radius without groupconfig/nas-identifier, so the
@@ -1619,23 +1621,17 @@ func writeOcservAuthMode(mode string) {
 		content = fmt.Sprintf("auth = \"%s\"\n%s", newAuth, content)
 	}
 	configPerGroupLine := fmt.Sprintf("config-per-group = %s", cfg.GroupDir)
-	if mode == "local" {
-		if !strings.Contains(content, configPerGroupLine) {
-			content += "\n" + configPerGroupLine + "\n"
-		}
-	} else {
-		content = strings.ReplaceAll(content, configPerGroupLine+"\n", "")
-		content = strings.ReplaceAll(content, configPerGroupLine+"\r\n", "")
-		content = strings.ReplaceAll(content, configPerGroupLine, "")
+	if !strings.Contains(content, configPerGroupLine) {
+		content += "\n" + configPerGroupLine + "\n"
 	}
 	_ = os.WriteFile(cfg.OcservConf, []byte(content), 0644)
 	exec.Command("systemctl", "restart", "ocserv").Run()
 }
 
 // updateSelectGroup writes group config files and updates ocserv.conf
-// to include all available groups in select-group lines.
-// With groupconfig=true, ocserv will read group policies from RADIUS Class attribute,
-// but select-group is still needed for the client to show the group dropdown.
+// to include all available groups in select-group lines. The RADIUS Class
+// attribute (OU=group) picks the group; select-group is still needed for
+// the client to show the group dropdown.
 func updateSelectGroup() {
 	cfg := getConfig()
 	groups := listGroups(cfg.GroupDir)
