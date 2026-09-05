@@ -10,6 +10,7 @@ import (
 	"html/template"
 	"io"
 	"log"
+	"net"
 	"net/http"
 	"os"
 	"os/exec"
@@ -58,10 +59,10 @@ type GroupConfig struct {
 }
 
 type RadiusServer struct {
-	Host         string `json:"host"`
-	Port         int    `json:"port"`
-	Secret       string `json:"secret"`
-	AcctPort     int    `json:"acct_port"`
+	Host          string `json:"host"`
+	Port          int    `json:"port"`
+	Secret        string `json:"secret"`
+	AcctPort      int    `json:"acct_port"`
 	NasIdentifier string `json:"nas_identifier"`
 }
 
@@ -88,27 +89,27 @@ type ServerStatus struct {
 }
 
 type OcservSettings struct {
-	TcpPort             int    `json:"tcp_port"`
-	UdpPort             int    `json:"udp_port"`
-	MaxClients          int    `json:"max_clients"`
-	MaxSameClients      int    `json:"max_same_clients"`
-	VPNNetwork          string `json:"vpn_network"`
-	VPNNetmask          string `json:"vpn_netmask"`
-	DNS                 string `json:"dns"`
-	Route               string `json:"route"`
-	Device              string `json:"device"`
-	XmlConfigFile       string `json:"xml_config_file"`
-	StatsReport         int    `json:"stats_report"`
-	TunnelAllDNS        bool   `json:"tunnel_all_dns"`
-	AuthTimeout         int    `json:"auth_timeout"`
-	CookieTimeout       int    `json:"cookie_timeout"`
-	DPD                 int    `json:"dpd"`
-	MobileDPD           int    `json:"mobile_dpd"`
-	RekeyTime           int    `json:"rekey_time"`
-	SwitchToTCPTimeout   int    `json:"switch_to_tcp_timeout"`
-	Keepalive           int    `json:"keepalive"`
-	MaxBanScore         int    `json:"max_ban_score"`
-	BanResetTime        int    `json:"ban_reset_time"`
+	TcpPort            int    `json:"tcp_port"`
+	UdpPort            int    `json:"udp_port"`
+	MaxClients         int    `json:"max_clients"`
+	MaxSameClients     int    `json:"max_same_clients"`
+	VPNNetwork         string `json:"vpn_network"`
+	VPNNetmask         string `json:"vpn_netmask"`
+	DNS                string `json:"dns"`
+	Route              string `json:"route"`
+	Device             string `json:"device"`
+	XmlConfigFile      string `json:"xml_config_file"`
+	StatsReport        int    `json:"stats_report"`
+	TunnelAllDNS       bool   `json:"tunnel_all_dns"`
+	AuthTimeout        int    `json:"auth_timeout"`
+	CookieTimeout      int    `json:"cookie_timeout"`
+	DPD                int    `json:"dpd"`
+	MobileDPD          int    `json:"mobile_dpd"`
+	RekeyTime          int    `json:"rekey_time"`
+	SwitchToTCPTimeout int    `json:"switch_to_tcp_timeout"`
+	Keepalive          int    `json:"keepalive"`
+	MaxBanScore        int    `json:"max_ban_score"`
+	BanResetTime       int    `json:"ban_reset_time"`
 }
 
 // ============================================================
@@ -169,10 +170,10 @@ func setConfig(cfg *AppConfig) {
 // ============================================================
 
 var tplFuncs = template.FuncMap{
-	"htmlattr":    func(s string) template.HTMLAttr { return template.HTMLAttr(s) },
-	"rawhtml":     func(s string) template.HTML { return template.HTML(s) },
-	"splitLines":  func(s string) []string { return strings.Split(s, "\n") },
-	"splitColon":  func(s string) []string { return strings.SplitN(s, ":", 3) },
+	"htmlattr":   func(s string) template.HTMLAttr { return template.HTMLAttr(s) },
+	"rawhtml":    func(s string) template.HTML { return template.HTML(s) },
+	"splitLines": func(s string) []string { return strings.Split(s, "\n") },
+	"splitColon": func(s string) []string { return strings.SplitN(s, ":", 3) },
 }
 
 func renderPage(w http.ResponseWriter, page string, data interface{}) {
@@ -226,6 +227,8 @@ func main() {
 		log.Fatalf("Failed to load config: %v", err)
 	}
 
+	ensureHostNetworking()
+
 	mux := http.NewServeMux()
 
 	mux.HandleFunc("/static/", serveStatic)
@@ -265,6 +268,86 @@ func main() {
 
 	log.Printf("ocserv-panel 启动在 %s", addr)
 	log.Fatal(http.ListenAndServe(addr, mux))
+}
+
+// ============================================================
+// Host networking (ip_forward + NAT)
+// ============================================================
+
+// ensureHostNetworking re-applies IP forwarding and the VPN NAT rule.
+// iptables rules live in kernel memory, so a VPS reboot wipes them even
+// though sysctl.conf keeps ip_forward enabled; without MASQUERADE clients
+// can connect but reach nothing outside the server.
+func ensureHostNetworking() {
+	cfg := getConfig()
+
+	exec.Command("sysctl", "-w", "net.ipv4.ip_forward=1").Run()
+
+	vpnCIDR := vpnCIDR(cfg)
+	if vpnCIDR == "" {
+		log.Printf("ensureHostNetworking: 无效的 vpn_network %q，跳过 NAT 配置", cfg.VPNNetwork)
+		return
+	}
+
+	outIF := defaultInterface()
+	if outIF == "" {
+		outIF = strings.TrimSpace(cfg.DefaultIF)
+	}
+	if outIF == "" {
+		log.Printf("ensureHostNetworking: 未找到默认出口网卡，跳过 NAT 配置")
+		return
+	}
+
+	// Idempotent: -C checks for an existing rule, -A only runs when missing.
+	check := exec.Command("iptables", "-t", "nat", "-C", "POSTROUTING", "-s", vpnCIDR, "-o", outIF, "-j", "MASQUERADE")
+	if err := check.Run(); err == nil {
+		return
+	}
+	add := exec.Command("iptables", "-t", "nat", "-A", "POSTROUTING", "-s", vpnCIDR, "-o", outIF, "-j", "MASQUERADE")
+	if output, err := add.CombinedOutput(); err != nil {
+		log.Printf("ensureHostNetworking: 添加 NAT 规则失败: %v: %s", err, strings.TrimSpace(string(output)))
+		return
+	}
+	log.Printf("ensureHostNetworking: 已恢复 NAT 规则 (%s -> %s)", vpnCIDR, outIF)
+}
+
+// vpnCIDR converts vpn_network/vpn_netmask into a CIDR string, accepting
+// either 10.0.0.0 + 255.255.255.0 or a bare 10.0.0.0/24.
+func vpnCIDR(cfg *AppConfig) string {
+	network := strings.TrimSpace(cfg.VPNNetwork)
+	if network == "" {
+		return ""
+	}
+	if _, _, err := net.ParseCIDR(network); err == nil {
+		return network
+	}
+	mask := strings.TrimSpace(cfg.VPNNetmask)
+	ip := net.ParseIP(network)
+	if ip == nil || (mask != "" && net.ParseIP(mask) == nil) {
+		return ""
+	}
+	if mask == "" {
+		return network + "/24"
+	}
+	size, _ := net.IPMask(net.ParseIP(mask).To4()).Size()
+	if size == 0 {
+		return ""
+	}
+	return fmt.Sprintf("%s/%d", network, size)
+}
+
+func defaultInterface() string {
+	output, err := exec.Command("ip", "route", "show", "default").Output()
+	if err != nil {
+		return ""
+	}
+	fields := strings.Fields(string(output))
+	for i, f := range fields {
+		if f == "dev" && i+1 < len(fields) {
+			return fields[i+1]
+		}
+	}
+	return ""
 }
 
 // ============================================================
@@ -405,27 +488,27 @@ func handleOcservSave(w http.ResponseWriter, r *http.Request) {
 	}
 	r.ParseForm()
 	settings := OcservSettings{
-		TcpPort:           atoiDefault(r.FormValue("tcp_port"), 443),
-		UdpPort:           atoiDefault(r.FormValue("udp_port"), 443),
-		MaxClients:        atoiDefault(r.FormValue("max_clients"), 1024),
-		MaxSameClients:    atoiDefault(r.FormValue("max_same_clients"), 2),
-		VPNNetwork:        r.FormValue("vpn_network"),
-		VPNNetmask:        r.FormValue("vpn_netmask"),
-		DNS:               r.FormValue("dns"),
+		TcpPort:            atoiDefault(r.FormValue("tcp_port"), 443),
+		UdpPort:            atoiDefault(r.FormValue("udp_port"), 443),
+		MaxClients:         atoiDefault(r.FormValue("max_clients"), 1024),
+		MaxSameClients:     atoiDefault(r.FormValue("max_same_clients"), 2),
+		VPNNetwork:         r.FormValue("vpn_network"),
+		VPNNetmask:         r.FormValue("vpn_netmask"),
+		DNS:                r.FormValue("dns"),
 		Route:              r.FormValue("route"),
-		Device:           r.FormValue("device"),
-		XmlConfigFile:    strings.TrimSpace(r.FormValue("xml_config_file")),
-		StatsReport:      atoiDefault(r.FormValue("stats_report"), 300),
-		TunnelAllDNS:      r.FormValue("tunnel_all_dns") == "on",
-		AuthTimeout:       atoiDefault(r.FormValue("auth_timeout"), 240),
-		CookieTimeout:     atoiDefault(r.FormValue("cookie_timeout"), 60),
-		DPD:               atoiDefault(r.FormValue("dpd"), 60),
-		MobileDPD:         atoiDefault(r.FormValue("mobile_dpd"), 180),
-		RekeyTime:         atoiDefault(r.FormValue("rekey_time"), 172800),
+		Device:             r.FormValue("device"),
+		XmlConfigFile:      strings.TrimSpace(r.FormValue("xml_config_file")),
+		StatsReport:        atoiDefault(r.FormValue("stats_report"), 300),
+		TunnelAllDNS:       r.FormValue("tunnel_all_dns") == "on",
+		AuthTimeout:        atoiDefault(r.FormValue("auth_timeout"), 240),
+		CookieTimeout:      atoiDefault(r.FormValue("cookie_timeout"), 60),
+		DPD:                atoiDefault(r.FormValue("dpd"), 60),
+		MobileDPD:          atoiDefault(r.FormValue("mobile_dpd"), 180),
+		RekeyTime:          atoiDefault(r.FormValue("rekey_time"), 172800),
 		SwitchToTCPTimeout: atoiDefault(r.FormValue("switch_to_tcp_timeout"), 25),
-		Keepalive:         atoiDefault(r.FormValue("keepalive"), 32400),
-		MaxBanScore:       atoiDefault(r.FormValue("max_ban_score"), 80),
-		BanResetTime:      atoiDefault(r.FormValue("ban_reset_time"), 1200),
+		Keepalive:          atoiDefault(r.FormValue("keepalive"), 32400),
+		MaxBanScore:        atoiDefault(r.FormValue("max_ban_score"), 80),
+		BanResetTime:       atoiDefault(r.FormValue("ban_reset_time"), 1200),
 	}
 	writeOcservSettings(settings)
 
@@ -451,27 +534,27 @@ func readOcservSettings() OcservSettings {
 	data, _ := os.ReadFile(cfg.OcservConf)
 	content := string(data)
 	return OcservSettings{
-		TcpPort:           getIntFromConfig(content, "tcp-port", 443),
-		UdpPort:           getIntFromConfig(content, "udp-port", 443),
-		MaxClients:        getIntFromConfig(content, "max-clients", 1024),
-		MaxSameClients:    getIntFromConfig(content, "max-same-clients", 2),
-		VPNNetwork:        getStrFromConfig(content, "ipv4-network", "10.0.0.0"),
-		VPNNetmask:        getStrFromConfig(content, "ipv4-netmask", "255.255.255.0"),
-		DNS:               getStrFromConfig(content, "dns", "8.8.8.8"),
-		Route:             getStrFromConfig(content, "route", "default"),
-		Device:            getStrFromConfig(content, "device", "vpns"),
-		XmlConfigFile:     getStrFromConfig(content, "user-profile", ""),
-		StatsReport:       getIntFromConfig(content, "stats-report-time", 300),
-		TunnelAllDNS:      strings.Contains(content, "tunnel-all-dns = true"),
-		AuthTimeout:       getIntFromConfig(content, "auth-timeout", 240),
-		CookieTimeout:     getIntFromConfig(content, "cookie-timeout", 60),
-		DPD:               getIntFromConfig(content, "dpd", 60),
-		MobileDPD:         getIntFromConfig(content, "mobile-dpd", 180),
-		RekeyTime:         getIntFromConfig(content, "rekey-time", 172800),
+		TcpPort:            getIntFromConfig(content, "tcp-port", 443),
+		UdpPort:            getIntFromConfig(content, "udp-port", 443),
+		MaxClients:         getIntFromConfig(content, "max-clients", 1024),
+		MaxSameClients:     getIntFromConfig(content, "max-same-clients", 2),
+		VPNNetwork:         getStrFromConfig(content, "ipv4-network", "10.0.0.0"),
+		VPNNetmask:         getStrFromConfig(content, "ipv4-netmask", "255.255.255.0"),
+		DNS:                getStrFromConfig(content, "dns", "8.8.8.8"),
+		Route:              getStrFromConfig(content, "route", "default"),
+		Device:             getStrFromConfig(content, "device", "vpns"),
+		XmlConfigFile:      getStrFromConfig(content, "user-profile", ""),
+		StatsReport:        getIntFromConfig(content, "stats-report-time", 300),
+		TunnelAllDNS:       strings.Contains(content, "tunnel-all-dns = true"),
+		AuthTimeout:        getIntFromConfig(content, "auth-timeout", 240),
+		CookieTimeout:      getIntFromConfig(content, "cookie-timeout", 60),
+		DPD:                getIntFromConfig(content, "dpd", 60),
+		MobileDPD:          getIntFromConfig(content, "mobile-dpd", 180),
+		RekeyTime:          getIntFromConfig(content, "rekey-time", 172800),
 		SwitchToTCPTimeout: getIntFromConfig(content, "switch-to-tcp-timeout", 25),
-		Keepalive:         getIntFromConfig(content, "keepalive", 32400),
-		MaxBanScore:       getIntFromConfig(content, "max-ban-score", 80),
-		BanResetTime:      getIntFromConfig(content, "ban-reset-time", 1200),
+		Keepalive:          getIntFromConfig(content, "keepalive", 32400),
+		MaxBanScore:        getIntFromConfig(content, "max-ban-score", 80),
+		BanResetTime:       getIntFromConfig(content, "ban-reset-time", 1200),
 	}
 }
 

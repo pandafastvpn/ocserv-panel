@@ -658,8 +658,8 @@ dns = 8.8.8.8
 route = default
 
 # === Per-group config ===
-# FreeRADIUS 控制组/会话策略，通过返回的 Class / Session-Timeout / Idle-Timeout 等属性下发。
-# 本地 config-per-group 在当前 ocserv 版本会与 radius supplemental config 冲突，因此不启用。
+# RADIUS 返回 Class 选择组，本地文件提供该组的限速、DNS、路由和超时策略。
+config-per-group = ${GROUP_DIR}
 
 # === Cisco compat ===
 cisco-client-compat = true
@@ -705,7 +705,8 @@ fi
 cat > /etc/systemd/system/ocserv-panel.service <<EOF
 [Unit]
 Description=ocserv-panel Web Management
-After=network.target
+After=network-online.target
+Wants=network-online.target
 
 [Service]
 Type=simple
