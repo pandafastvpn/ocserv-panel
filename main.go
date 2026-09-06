@@ -1011,6 +1011,59 @@ var cnReservedCIDRs = []string{
 	"203.0.113.0/24", "224.0.0.0/4", "240.0.0.0/4",
 }
 
+// Whitelist compaction: official AnyConnect clients parse the CSTP config
+// headers with a small buffer and SILENTLY DROP everything beyond it
+// (observed on Android: only the first ~200 routes / ~7KB survive). The full
+// complement of the CN zone is ~12000 CIDRs, so it must be compacted:
+// largest blocks first, until the byte budget is exhausted. The dropped tail
+// is small APNIC-area fragments whose traffic simply goes direct (same as
+// the old exclude-mode behavior).
+const (
+	whitelistHeaderPrefix = "X-CSTP-Split-Include: "
+	maxWhitelistBytes     = 6500
+	maxWhitelistRoutes    = 220
+)
+
+func compactWhitelistCIDRs(full []string) []string {
+	type cand struct {
+		cidr  string
+		start uint32
+		pref  int
+		bytes int
+	}
+	entries := make([]cand, 0, len(full))
+	for _, c := range full {
+		pref := 32
+		if i := strings.LastIndexByte(c, '/'); i >= 0 {
+			if v, err := strconv.Atoi(c[i+1:]); err == nil {
+				pref = v
+			}
+		}
+		r, _ := cidrToRange(c)
+		entries = append(entries, cand{c, r.start, pref, len(whitelistHeaderPrefix) + len(c) + 2})
+	}
+	// Largest blocks first so the coarsest coverage survives the budget.
+	sort.SliceStable(entries, func(i, j int) bool {
+		if entries[i].pref != entries[j].pref {
+			return entries[i].pref < entries[j].pref
+		}
+		return entries[i].start < entries[j].start
+	})
+	out := make([]string, 0, maxWhitelistRoutes)
+	var used int
+	for _, e := range entries {
+		if len(out) >= maxWhitelistRoutes || used+e.bytes > maxWhitelistBytes {
+			break
+		}
+		used += e.bytes
+		out = append(out, e.cidr)
+	}
+	if n := len(full); n > len(out) {
+		log.Printf("whitelist compacted: kept %d of %d CIDRs (%d bytes of CSTP config headers)", len(out), n, used)
+	}
+	return out
+}
+
 // cnWhitelistCIDRs builds the "everything except China" route list used by
 // whitelist-mode groups: the complement of the CN zone in the whole IPv4
 // space, minus local/private/reserved ranges and the VPN pool itself.
@@ -1038,11 +1091,11 @@ func cnWhitelistCIDRs() ([]string, error) {
 	sort.Slice(cuts, func(i, j int) bool { return cuts[i].start < cuts[j].start })
 	merged := mergeIPRanges(cuts)
 	free := complementRanges(merged)
-	cidrs := rangesToCIDRs(free)
-	if len(cidrs) > 30000 {
-		return nil, fmt.Errorf("白名单路由异常庞大（%d 条），已中止", len(cidrs))
+	full := rangesToCIDRs(free)
+	if len(full) == 0 {
+		return nil, fmt.Errorf("白名单计算结果为空")
 	}
-	return cidrs, nil
+	return compactWhitelistCIDRs(full), nil
 }
 
 // downloadCNZone fetches the aggregated China IPv4 list with validation and a
