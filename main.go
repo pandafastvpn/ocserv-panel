@@ -43,6 +43,11 @@ type AppConfig struct {
 	VPNNetwork    string `json:"vpn_network"`
 	VPNNetmask    string `json:"vpn_netmask"`
 	TunDevice     string `json:"tun_device"`
+
+	// ShowDefaultGroup controls whether the fixed "default[默认组]" entry is
+	// written as the first select-group line. Off = only group files appear
+	// in the client dropdown.
+	ShowDefaultGroup bool `json:"show_default_group"`
 }
 
 type GroupConfig struct {
@@ -663,11 +668,6 @@ server-stats-reset-time = 604800
 
 	content = strings.ReplaceAll(content, "display-name =", "# display-name =")
 
-	// Ensure default group config exists
-	defaultGroupPath := filepath.Join(cfg.GroupDir, "default")
-	if !fileExists(defaultGroupPath) {
-		os.WriteFile(defaultGroupPath, []byte("# Default group\n"), 0644)
-	}
 	_ = os.WriteFile(cfg.OcservConf, []byte(content), 0644)
 	updateSelectGroup()
 }
@@ -679,10 +679,32 @@ server-stats-reset-time = 604800
 func handleGroups(w http.ResponseWriter, r *http.Request) {
 	cfg := getConfig()
 	groups := listGroups(cfg.GroupDir)
+
+	// ?edit=<name> preloads a group into the form below the table.
+	var edit *GroupConfig
+	editName := r.URL.Query().Get("edit")
+	if editName != "" {
+		if !isValidName(editName) {
+			http.Error(w, "Invalid group name", http.StatusBadRequest)
+			return
+		}
+		for i := range groups {
+			if groups[i].Name == editName {
+				edit = &groups[i]
+				break
+			}
+		}
+		if edit == nil {
+			http.Redirect(w, r, "/groups", http.StatusSeeOther)
+			return
+		}
+	}
+
 	data := map[string]interface{}{
 		"Active":   "groups",
 		"Groups":   groups,
 		"AuthMode": cfg.AuthMode,
+		"Edit":     edit,
 	}
 	renderPage(w, "groups.html", data)
 }
@@ -696,6 +718,12 @@ func handleGroupSave(w http.ResponseWriter, r *http.Request) {
 	name := r.FormValue("name")
 	if !isValidName(name) {
 		http.Error(w, "Invalid group name", http.StatusBadRequest)
+		return
+	}
+	// Editing an existing group must not silently rename it: user-to-group
+	// membership lives in ocpasswd / RADIUS Class attributes and would break.
+	if orig := r.FormValue("orig_name"); orig != "" && orig != name {
+		http.Error(w, "不支持重命名用户组，请删除后重建", http.StatusBadRequest)
 		return
 	}
 	cfg := getConfig()
@@ -1510,13 +1538,14 @@ func handleLocalUserDelete(w http.ResponseWriter, r *http.Request) {
 func handleSettings(w http.ResponseWriter, r *http.Request) {
 	cfg := getConfig()
 	data := map[string]interface{}{
-		"Active":        "settings",
-		"User":          cfg.PanelUser,
-		"Pass":          cfg.PanelPass,
-		"Port":          cfg.PanelPort,
-		"NasIdentifier": cfg.NasIdentifier,
-		"AuthMode":      cfg.AuthMode,
-		"Saved":         r.URL.Query().Get("saved") == "1",
+		"Active":           "settings",
+		"User":             cfg.PanelUser,
+		"Pass":             cfg.PanelPass,
+		"Port":             cfg.PanelPort,
+		"NasIdentifier":    cfg.NasIdentifier,
+		"AuthMode":         cfg.AuthMode,
+		"ShowDefaultGroup": cfg.ShowDefaultGroup,
+		"Saved":            r.URL.Query().Get("saved") == "1",
 	}
 	renderPage(w, "settings.html", data)
 }
@@ -1540,6 +1569,7 @@ func handleSettingsSave(w http.ResponseWriter, r *http.Request) {
 		mode = "radius"
 	}
 	cfg.AuthMode = mode
+	cfg.ShowDefaultGroup = r.FormValue("show_default_group") == "on"
 	if cfg.LocalPasswd == "" {
 		cfg.LocalPasswd = "/etc/ocserv/ocpasswd"
 	}
@@ -1625,7 +1655,9 @@ func writeOcservAuthMode(mode string) {
 		content += "\n" + configPerGroupLine + "\n"
 	}
 	_ = os.WriteFile(cfg.OcservConf, []byte(content), 0644)
-	exec.Command("systemctl", "restart", "ocserv").Run()
+	// Regenerate the select-group block (honours ShowDefaultGroup) and restart
+	// ocserv so both the auth mode and dropdown changes take effect.
+	updateSelectGroup()
 }
 
 // updateSelectGroup writes group config files and updates ocserv.conf
@@ -1636,18 +1668,15 @@ func updateSelectGroup() {
 	cfg := getConfig()
 	groups := listGroups(cfg.GroupDir)
 
-	// Ensure default group config exists
-	defaultGroupPath := filepath.Join(cfg.GroupDir, "default")
-	if !fileExists(defaultGroupPath) {
-		os.WriteFile(defaultGroupPath, []byte("# Default group\n"), 0644)
-	}
-
-	// Build select-group lines
+	// Build select-group lines. The fixed "default[默认组]" entry is optional
+	// (panel setting); group files always appear.
 	var lines []string
-	// Always include default group first
-	lines = append(lines, "select-group = default[默认组]")
+	if cfg.ShowDefaultGroup {
+		lines = append(lines, "select-group = default[默认组]")
+	}
 	for _, g := range groups {
-		if g.Name == "default" {
+		if g.Name == "default" && cfg.ShowDefaultGroup {
+			// avoid a duplicate entry next to the fixed one
 			continue
 		}
 		lines = append(lines, fmt.Sprintf("select-group = %s[%s]", g.Name, g.DisplayName))
@@ -1678,11 +1707,13 @@ func updateSelectGroup() {
 
 	// Insert select-group block after config-per-group line
 	configPerGroupLine := fmt.Sprintf("config-per-group = %s", cfg.GroupDir)
-	if strings.Contains(content, configPerGroupLine) {
-		content = strings.Replace(content, configPerGroupLine, configPerGroupLine+"\n"+selectGroupBlock, 1)
-	} else {
-		// Fallback: insert before Cisco compat section
-		content = strings.Replace(content, "# === Cisco compat ===", selectGroupBlock+"\n\n# === Cisco compat ===", 1)
+	if selectGroupBlock != "" {
+		if strings.Contains(content, configPerGroupLine) {
+			content = strings.Replace(content, configPerGroupLine, configPerGroupLine+"\n"+selectGroupBlock, 1)
+		} else {
+			// Fallback: insert before Cisco compat section
+			content = strings.Replace(content, "# === Cisco compat ===", selectGroupBlock+"\n\n# === Cisco compat ===", 1)
+		}
 	}
 
 	// Write updated config
@@ -1691,7 +1722,7 @@ func updateSelectGroup() {
 		return
 	}
 
-	log.Printf("select-group updated: %d groups", len(groups)+1)
+	log.Printf("select-group updated: %d groups", len(lines))
 
 	// Restart ocserv to apply changes
 	exec.Command("systemctl", "restart", "ocserv").Run()
