@@ -54,7 +54,7 @@ code{background:#0f172a;padding:2px 6px;border-radius:4px;font-size:13px;color:#
 <p><strong>中国国内直连（分流）</strong></p>
 <p style="margin-top:8px;">数据源：ipdeny.com 聚合列表（每周自动刷新，更新后自动同步到已启用的组）。每种模式的差异：</p>
 <p style="margin-top:8px;"><strong>排除模式</strong>——组文件附加约 {{.CNCount}} 条 <code>no-route</code>，全局默认路由不变。客户端对这些地址直连。<span style="color:#fbbf24;">注意：安卓客户端因系统 API 限制不支持排除路由，会全走 VPN。</span></p>
-<p style="margin-top:8px;"><strong>白名单模式（推荐安卓用户使用）</strong>——组文件不使用默认路由，改为附加"除中国外全部网段"的 <code>route</code> 列表（约 12000+ 条，自动剔除局域网/保留段/VPN 自身网段）。全平台一致生效，客户端统计里可见安全路由列表。</p>
+<p style="margin-top:8px;"><strong>白名单模式（推荐安卓用户使用）</strong>——组文件不使用默认路由，改为附加"非中国网段"的 <code>route</code> 列表。列表按块从大到小压缩到约 200 条以内（官方客户端对配置头部有约 200 条的静默上限，超出的会被丢弃），Google/Microsoft/Amazon/Cloudflare 等大网段全部保留；被压缩掉的小块流量自动回落为直连。全平台一致生效，客户端统计里可见安全路由列表。</p>
 <p style="margin-top:8px;">当前排除列表缓存：
 {{if .CNCached}}<strong style="color:#4ade80;">已就绪</strong>（{{.CNCount}} 条，更新于 {{.CNInfoSource}}）
 {{else}}<strong style="color:#f87171;">未下载</strong>{{end}}
