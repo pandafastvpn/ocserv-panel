@@ -26,7 +26,7 @@
 
 ```bash
 apt update && apt install git sudo -y
-git clone https://github.com/pandafastvpn/ocserv-panel.git
+git clone -b new https://github.com/pandafastvpn/ocserv-panel.git
 cd ocserv-panel
 sudo bash install.sh
 ```
