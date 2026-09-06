@@ -4,18 +4,21 @@ import (
 	"bytes"
 	"crypto/rand"
 	"crypto/subtle"
+	"encoding/binary"
 	"encoding/json"
 	"fmt"
 	"html"
 	"html/template"
 	"io"
 	"log"
+	"math/bits"
 	"net"
 	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -61,10 +64,19 @@ type GroupConfig struct {
 	Routes         string `json:"routes"`
 	NoRoutes       string `json:"no_routes"`
 	MaxSameClients int    `json:"max_same_clients"`
-	// CNDirect marks groups carrying the auto-managed China no-route block.
-	CNDirect      bool `json:"cn_direct"`
-	CNDirectCount int  `json:"cn_direct_count"`
+	// CNDirect marks groups carrying the auto-managed China routing block.
+	// CNMode selects how it is applied: "exclude" pushes no-route entries
+	// (desktop/iOS only), "whitelist" pushes the complement as route
+	// entries (works on Android too).
+	CNDirect      bool   `json:"cn_direct"`
+	CNMode        string `json:"cn_mode"`
+	CNDirectCount int    `json:"cn_direct_count"`
 }
+
+const (
+	CNModeExclude   = "exclude"
+	CNModeWhitelist = "whitelist"
+)
 
 type RadiusServer struct {
 	Host          string `json:"host"`
@@ -793,13 +805,23 @@ func handleGroupSave(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "不支持重命名用户组，请删除后重建", http.StatusBadRequest)
 		return
 	}
-	if r.FormValue("cn_direct") == "on" && cnZoneCIDRs() == nil {
+	mode := r.FormValue("cn_mode")
+	if mode != "" && mode != CNModeExclude && mode != CNModeWhitelist {
+		http.Error(w, "无效的分流模式", http.StatusBadRequest)
+		return
+	}
+	if mode != "" && cnZoneCIDRs() == nil {
 		http.Error(w, "中国路由列表尚未下载或无效，请先在用户组页面点击“立即更新”", http.StatusBadRequest)
 		return
 	}
 	cfg := getConfig()
 	groupPath := filepath.Join(cfg.GroupDir, name)
-	_ = os.WriteFile(groupPath, []byte(buildGroupFileContent(name, r)), 0644)
+	content, err := buildGroupFileContent(name, r)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	_ = os.WriteFile(groupPath, []byte(content), 0644)
 	updateSelectGroup()
 	http.Redirect(w, r, "/groups", http.StatusSeeOther)
 }
@@ -853,10 +875,11 @@ func parseGroupConfig(name, content string) GroupConfig {
 	g.DNS = getStrFromConfig(content, "dns", "")
 	g.MaxSameClients = getIntFromConfig(content, "max-same-clients", 0)
 	// Managed CN block: counted for display, stripped before parsing so it
-	// neither floods the edit form's no-routes field nor mixes with manual
-	// entries (regardless of where hand-added lines sit in the file).
+	// neither floods the edit form's fields nor mixes with manual entries
+	// (regardless of where hand-added lines sit in the file).
 	if begin := byteOffsetOfLine(content, cnBlockBegin); begin >= 0 {
 		g.CNDirect = true
+		g.CNMode = CNModeExclude
 		after := content[begin+len(cnBlockBegin):]
 		block := after
 		rest := ""
@@ -865,7 +888,12 @@ func parseGroupConfig(name, content string) GroupConfig {
 			rest = after[endOff+len(cnBlockEnd):]
 		}
 		for _, line := range strings.Split(block, "\n") {
-			if strings.HasPrefix(strings.TrimSpace(line), "no-route =") {
+			trimmed := strings.TrimSpace(line)
+			if m := cnModeLineRe.FindStringSubmatch(trimmed); m != nil {
+				g.CNMode = m[1]
+				continue
+			}
+			if strings.HasPrefix(trimmed, "no-route =") || strings.HasPrefix(trimmed, "route =") {
 				g.CNDirectCount++
 			}
 		}
@@ -888,7 +916,134 @@ func parseGroupConfig(name, content string) GroupConfig {
 const cnBlockBegin = "# cn-direct begin (managed by ocserv-panel)"
 const cnBlockEnd = "# cn-direct end"
 
+// The managed block starts with a mode marker so the panel can tell the two
+// routing strategies apart when regenerating it.
+var cnModeLineRe = regexp.MustCompile(`^#\s*cn-mode\s*=\s*(exclude|whitelist)$`)
+
 func cnZonePath() string { return "/etc/ocserv/cn-aggregated.zone" }
+
+// ipRange is an inclusive IPv4 interval [start, end].
+type ipRange struct{ start, end uint32 }
+
+func cidrToRange(cidr string) (ipRange, bool) {
+	_, ipnet, err := net.ParseCIDR(cidr)
+	if err != nil {
+		return ipRange{}, false
+	}
+	if ipnet.IP.To4() == nil {
+		return ipRange{}, false
+	}
+	start := binary.BigEndian.Uint32(ipnet.IP.To4())
+	ones, _ := ipnet.Mask.Size()
+	end := start
+	if ones < 32 {
+		end = start | (0xFFFFFFFF >> uint(ones))
+	}
+	return ipRange{start, end}, true
+}
+
+func uint32ToIP(v uint32) string {
+	return net.IP{byte(v >> 24), byte(v >> 16), byte(v >> 8), byte(v)}.String()
+}
+
+func mergeIPRanges(rs []ipRange) []ipRange {
+	var out []ipRange
+	for _, r := range rs {
+		if n := len(out); n > 0 && uint64(r.start) <= uint64(out[n-1].end)+1 {
+			if r.end > out[n-1].end {
+				out[n-1].end = r.end
+			}
+			continue
+		}
+		out = append(out, r)
+	}
+	return out
+}
+
+// complementRanges returns the free space in [0, 2^32-1] outside cuts.
+// cuts must be sorted and non-overlapping.
+func complementRanges(cuts []ipRange) []ipRange {
+	var out []ipRange
+	cur := uint64(0)
+	for _, c := range cuts {
+		if uint64(c.start) > cur {
+			out = append(out, ipRange{uint32(cur), uint32(c.start - 1)})
+		}
+		if uint64(c.end)+1 > cur {
+			cur = uint64(c.end) + 1
+		}
+	}
+	if cur <= 0xFFFFFFFF {
+		out = append(out, ipRange{uint32(cur), 0xFFFFFFFF})
+	}
+	return out
+}
+
+func rangesToCIDRs(rs []ipRange) []string {
+	var out []string
+	for _, r := range rs {
+		s := uint64(r.start)
+		for s <= uint64(r.end) {
+			tz := 32
+			if s != 0 {
+				tz = bits.TrailingZeros64(s)
+			}
+			size := uint64(1) << uint(tz)
+			avail := uint64(r.end) - s + 1
+			for size > avail {
+				size >>= 1
+			}
+			prefix := 32 - int(bits.Len64(size)-1)
+			out = append(out, fmt.Sprintf("%s/%d", uint32ToIP(uint32(s)), prefix))
+			s += size
+		}
+	}
+	return out
+}
+
+// Ranges that must stay outside the whitelist: local, private, CGNAT,
+// multicast and reserved space. Tunneling them would break LAN access and
+// carrier-grade NAT clients.
+var cnReservedCIDRs = []string{
+	"0.0.0.0/8", "10.0.0.0/8", "100.64.0.0/10", "127.0.0.0/8",
+	"169.254.0.0/16", "172.16.0.0/12", "192.0.0.0/24", "192.0.2.0/24",
+	"192.168.0.0/16", "198.18.0.0/15", "198.51.100.0/24",
+	"203.0.113.0/24", "224.0.0.0/4", "240.0.0.0/4",
+}
+
+// cnWhitelistCIDRs builds the "everything except China" route list used by
+// whitelist-mode groups: the complement of the CN zone in the whole IPv4
+// space, minus local/private/reserved ranges and the VPN pool itself.
+func cnWhitelistCIDRs() ([]string, error) {
+	zone := cnZoneCIDRs()
+	if len(zone) == 0 {
+		return nil, fmt.Errorf("中国路由列表尚未下载或无效")
+	}
+	cuts := make([]ipRange, 0, len(zone)+len(cnReservedCIDRs)+1)
+	for _, cidr := range zone {
+		if r, ok := cidrToRange(cidr); ok {
+			cuts = append(cuts, r)
+		}
+	}
+	for _, cidr := range cnReservedCIDRs {
+		if r, ok := cidrToRange(cidr); ok {
+			cuts = append(cuts, r)
+		}
+	}
+	if cidr := vpnCIDR(getConfig()); cidr != "" {
+		if r, ok := cidrToRange(cidr); ok {
+			cuts = append(cuts, r)
+		}
+	}
+	sort.Slice(cuts, func(i, j int) bool { return cuts[i].start < cuts[j].start })
+	merged := mergeIPRanges(cuts)
+	free := complementRanges(merged)
+	cidrs := rangesToCIDRs(free)
+	if len(cidrs) > 30000 {
+		return nil, fmt.Errorf("白名单路由异常庞大（%d 条），已中止", len(cidrs))
+	}
+	return cidrs, nil
+}
 
 // downloadCNZone fetches the aggregated China IPv4 list with validation and a
 // fallback mirror, keeping the previous cache untouched on any failure.
@@ -967,13 +1122,32 @@ func cnZoneCIDRs() []string {
 	return cidrs
 }
 
-// syncCNDirect rewrites the managed no-route block of every CN-enabled group
-// from the current zone cache. Called after each zone refresh.
+// managedCNCIDRs returns the entry list for the given routing mode; nil means
+// the mode cannot be applied right now.
+func managedCNCIDRs(mode string) ([]string, error) {
+	if mode == CNModeWhitelist {
+		return cnWhitelistCIDRs()
+	}
+	if mode == CNModeExclude {
+		cidrs := cnZoneCIDRs()
+		if cidrs == nil {
+			return nil, fmt.Errorf("中国路由列表尚未下载或无效")
+		}
+		return cidrs, nil
+	}
+	return nil, nil
+}
+
+// syncCNDirect rewrites the managed routing block of every CN-enabled group
+// from the current zone cache, honoring each group's routing mode. Called
+// after each zone refresh.
 func syncCNDirect() {
-	cidrs := cnZoneCIDRs()
-	if cidrs == nil {
+	zone := cnZoneCIDRs()
+	if zone == nil {
 		return
 	}
+	var whitelist []string
+	wlReady := false
 	entries, err := os.ReadDir(getConfig().GroupDir)
 	if err != nil {
 		return
@@ -991,20 +1165,37 @@ func syncCNDirect() {
 		if !g.CNDirect {
 			continue
 		}
-		updated := writeCNBlock(string(data), cidrs)
+		var cidrs []string
+		if g.CNMode == CNModeWhitelist {
+			if !wlReady {
+				whitelist, err = cnWhitelistCIDRs()
+				wlReady = true
+				if err != nil {
+					log.Printf("syncCNDirect: whitelist build failed: %v", err)
+				}
+			}
+			if whitelist == nil {
+				continue
+			}
+			cidrs = whitelist
+		} else {
+			cidrs = zone
+		}
+		updated := writeCNBlock(string(data), g.CNMode, cidrs)
 		if updated != string(data) {
 			if err := os.WriteFile(path, []byte(updated), 0644); err != nil {
 				log.Printf("syncCNDirect: cannot update %s: %v", path, err)
 			} else {
-				log.Printf("syncCNDirect: updated CN block in %s (%d routes)", entry.Name(), len(cidrs))
+				log.Printf("syncCNDirect: updated %s block in %s (%d routes)", g.CNMode, entry.Name(), len(cidrs))
 			}
 		}
 	}
 }
 
-// writeCNBlock replaces (or appends) the managed CN no-route block in a group
-// file, preserving everything outside the markers.
-func writeCNBlock(content string, cidrs []string) string {
+// writeCNBlock replaces (or appends) the managed CN routing block in a group
+// file, preserving everything outside the markers. In exclude mode the block
+// holds no-route entries; in whitelist mode it holds route entries.
+func writeCNBlock(content string, mode string, cidrs []string) string {
 	begin := byteOffsetOfLine(content, cnBlockBegin)
 	var head, tail string
 	if begin >= 0 {
@@ -1022,11 +1213,16 @@ func writeCNBlock(content string, cidrs []string) string {
 		}
 		head = content
 	}
+	prefix := "no-route = "
+	if mode == CNModeWhitelist {
+		prefix = "route = "
+	}
 	var buf strings.Builder
 	buf.WriteString(head)
 	buf.WriteString(cnBlockBegin + "\n")
+	buf.WriteString(fmt.Sprintf("# cn-mode = %s\n", mode))
 	for _, c := range cidrs {
-		buf.WriteString("no-route = " + c + "\n")
+		buf.WriteString(prefix + c + "\n")
 	}
 	buf.WriteString(cnBlockEnd + "\n")
 	buf.WriteString(tail)
@@ -1047,8 +1243,8 @@ func byteOffsetOfLine(content, line string) int {
 }
 
 // buildGroupFileContent assembles a group file from form fields plus the
-// managed CN block when enabled.
-func buildGroupFileContent(name string, r *http.Request) string {
+// managed CN routing block when enabled.
+func buildGroupFileContent(name string, r *http.Request) (string, error) {
 	var lines []string
 	displayName := strings.TrimSpace(r.FormValue("display_name"))
 	if displayName != "" {
@@ -1090,12 +1286,15 @@ func buildGroupFileContent(name string, r *http.Request) string {
 		lines = append(lines, fmt.Sprintf("max-same-clients = %d", msc))
 	}
 	content := fmt.Sprintf("# Group: %s\n# Generated: %s\n%s\n", name, time.Now().Format("2006-01-02 15:04:05"), strings.Join(lines, "\n"))
-	if r.FormValue("cn_direct") == "on" {
-		if cidrs := cnZoneCIDRs(); cidrs != nil {
-			content = writeCNBlock(content, cidrs)
+	mode := r.FormValue("cn_mode")
+	if mode == CNModeExclude || mode == CNModeWhitelist {
+		cidrs, err := managedCNCIDRs(mode)
+		if err != nil {
+			return "", err
 		}
+		content = writeCNBlock(content, mode, cidrs)
 	}
-	return content
+	return content, nil
 }
 
 // ============================================================
