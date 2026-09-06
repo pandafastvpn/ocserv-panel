@@ -61,6 +61,9 @@ type GroupConfig struct {
 	Routes         string `json:"routes"`
 	NoRoutes       string `json:"no_routes"`
 	MaxSameClients int    `json:"max_same_clients"`
+	// CNDirect marks groups carrying the auto-managed China no-route block.
+	CNDirect      bool `json:"cn_direct"`
+	CNDirectCount int  `json:"cn_direct_count"`
 }
 
 type RadiusServer struct {
@@ -233,6 +236,7 @@ func main() {
 	}
 
 	ensureHostNetworking()
+	go startCNZoneRefresher()
 
 	mux := http.NewServeMux()
 
@@ -246,6 +250,7 @@ func main() {
 	mux.HandleFunc("/groups", authMiddleware(handleGroups))
 	mux.HandleFunc("/groups/save", authMiddleware(handleGroupSave))
 	mux.HandleFunc("/groups/delete", authMiddleware(handleGroupDelete))
+	mux.HandleFunc("/groups/cnzone", authMiddleware(handleCNZoneUpdate))
 	mux.HandleFunc("/radius", authMiddleware(handleRadius))
 	mux.HandleFunc("/radius/save", authMiddleware(handleRadiusSave))
 	mux.HandleFunc("/radius/test", authMiddleware(handleRadiusTest))
@@ -283,6 +288,35 @@ func main() {
 // iptables rules live in kernel memory, so a VPS reboot wipes them even
 // though sysctl.conf keeps ip_forward enabled; without MASQUERADE clients
 // can connect but reach nothing outside the server.
+// startCNZoneRefresher refreshes the China zone list weekly and syncs all
+// CN-enabled groups. The first refresh happens shortly after startup unless
+// a fresh cache already exists.
+func startCNZoneRefresher() {
+	needInitial := true
+	if st, err := os.Stat(cnZonePath()); err == nil {
+		needInitial = time.Since(st.ModTime()) > 7*24*time.Hour
+	}
+	if needInitial {
+		time.Sleep(30 * time.Second)
+		if n, err := downloadCNZone(); err != nil {
+			log.Printf("CN zone refresh: %v", err)
+		} else {
+			log.Printf("CN zone refreshed: %d routes", n)
+			syncCNDirect()
+		}
+	}
+	ticker := time.NewTicker(7 * 24 * time.Hour)
+	defer ticker.Stop()
+	for range ticker.C {
+		if n, err := downloadCNZone(); err != nil {
+			log.Printf("CN zone refresh: %v", err)
+		} else {
+			log.Printf("CN zone refreshed: %d routes", n)
+			syncCNDirect()
+		}
+	}
+}
+
 func ensureHostNetworking() {
 	cfg := getConfig()
 
@@ -701,12 +735,45 @@ func handleGroups(w http.ResponseWriter, r *http.Request) {
 	}
 
 	data := map[string]interface{}{
-		"Active":   "groups",
-		"Groups":   groups,
-		"AuthMode": cfg.AuthMode,
-		"Edit":     edit,
+		"Active":       "groups",
+		"Groups":       groups,
+		"AuthMode":     cfg.AuthMode,
+		"Edit":         edit,
+		"CNCached":     cnZoneCIDRs() != nil,
+		"CNCount":      len(cnZoneCIDRs()),
+		"CNInfoSource": cnZoneSource,
 	}
 	renderPage(w, "groups.html", data)
+}
+
+func cnZoneSource() string {
+	data, err := os.ReadFile(cnZonePath())
+	if err != nil {
+		return ""
+	}
+	for _, line := range strings.Split(string(data), "\n") {
+		if strings.HasPrefix(line, "# China IPv4 aggregated zone, fetched ") {
+			return strings.TrimPrefix(line, "# China IPv4 aggregated zone, fetched ")
+		}
+	}
+	return ""
+}
+
+func handleCNZoneUpdate(w http.ResponseWriter, r *http.Request) {
+	n, err := downloadCNZone()
+	if err != nil {
+		http.Error(w, "下载中国路由列表失败: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+	syncCNDirect()
+	renderPage(w, "groups.html", map[string]interface{}{
+		"Active":   "groups",
+		"Groups":   listGroups(getConfig().GroupDir),
+		"AuthMode": getConfig().AuthMode,
+		"CNMsg":    fmt.Sprintf("已更新中国路由列表（%d 条），已同步到所有启用国内直连的组", n),
+		"CNCached": true,
+		"CNCount":  n,
+	})
 }
 
 func handleGroupSave(w http.ResponseWriter, r *http.Request) {
@@ -726,50 +793,13 @@ func handleGroupSave(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "不支持重命名用户组，请删除后重建", http.StatusBadRequest)
 		return
 	}
+	if r.FormValue("cn_direct") == "on" && cnZoneCIDRs() == nil {
+		http.Error(w, "中国路由列表尚未下载或无效，请先在用户组页面点击“立即更新”", http.StatusBadRequest)
+		return
+	}
 	cfg := getConfig()
 	groupPath := filepath.Join(cfg.GroupDir, name)
-	var lines []string
-	displayName := strings.TrimSpace(r.FormValue("display_name"))
-	if displayName != "" {
-		// Metadata is kept in a comment so ocserv does not parse it as an option.
-		lines = append(lines, fmt.Sprintf("# display-name = %s", displayName))
-	}
-	rx := atoiDefault(r.FormValue("rx_data_per_sec"), 0)
-	tx := atoiDefault(r.FormValue("tx_data_per_sec"), 0)
-	st := atoiDefault(r.FormValue("session_timeout"), 0)
-	it := atoiDefault(r.FormValue("idle_timeout"), 0)
-	dns := r.FormValue("dns")
-	routes := r.FormValue("routes")
-	noRoutes := r.FormValue("no_routes")
-	msc := atoiDefault(r.FormValue("max_same_clients"), 0)
-	if rx > 0 {
-		lines = append(lines, fmt.Sprintf("rx-data-per-sec = %d", rx))
-	}
-	if tx > 0 {
-		lines = append(lines, fmt.Sprintf("tx-data-per-sec = %d", tx))
-	}
-	if st > 0 {
-		lines = append(lines, fmt.Sprintf("session-timeout = %d", st))
-	}
-	if it > 0 {
-		lines = append(lines, fmt.Sprintf("idle-timeout = %d", it))
-	}
-	if dns != "" {
-		for _, d := range strings.Fields(dns) {
-			lines = append(lines, fmt.Sprintf("dns = %s", d))
-		}
-	}
-	for _, route := range strings.Fields(routes) {
-		lines = append(lines, fmt.Sprintf("route = %s", route))
-	}
-	for _, route := range strings.Fields(noRoutes) {
-		lines = append(lines, fmt.Sprintf("no-route = %s", route))
-	}
-	if msc > 0 {
-		lines = append(lines, fmt.Sprintf("max-same-clients = %d", msc))
-	}
-	content := fmt.Sprintf("# Group: %s\n# Generated: %s\n%s\n", name, time.Now().Format("2006-01-02 15:04:05"), strings.Join(lines, "\n"))
-	_ = os.WriteFile(groupPath, []byte(content), 0644)
+	_ = os.WriteFile(groupPath, []byte(buildGroupFileContent(name, r)), 0644)
 	updateSelectGroup()
 	http.Redirect(w, r, "/groups", http.StatusSeeOther)
 }
@@ -822,6 +852,25 @@ func parseGroupConfig(name, content string) GroupConfig {
 	g.IdleTimeout = getIntFromConfig(content, "idle-timeout", 0)
 	g.DNS = getStrFromConfig(content, "dns", "")
 	g.MaxSameClients = getIntFromConfig(content, "max-same-clients", 0)
+	// Managed CN block: counted for display, stripped before parsing so it
+	// neither floods the edit form's no-routes field nor mixes with manual
+	// entries (regardless of where hand-added lines sit in the file).
+	if begin := byteOffsetOfLine(content, cnBlockBegin); begin >= 0 {
+		g.CNDirect = true
+		after := content[begin+len(cnBlockBegin):]
+		block := after
+		rest := ""
+		if endOff := byteOffsetOfLine(after, cnBlockEnd); endOff >= 0 {
+			block = after[:endOff]
+			rest = after[endOff+len(cnBlockEnd):]
+		}
+		for _, line := range strings.Split(block, "\n") {
+			if strings.HasPrefix(strings.TrimSpace(line), "no-route =") {
+				g.CNDirectCount++
+			}
+		}
+		content = content[:begin] + rest
+	}
 	routeRe := regexp.MustCompile(`(?m)^route\s*=\s*(.+)$`)
 	noRouteRe := regexp.MustCompile(`(?m)^no-route\s*=\s*(.+)$`)
 	var routes, noRoutes []string
@@ -834,6 +883,219 @@ func parseGroupConfig(name, content string) GroupConfig {
 	g.Routes = strings.Join(routes, " ")
 	g.NoRoutes = strings.Join(noRoutes, " ")
 	return g
+}
+
+const cnBlockBegin = "# cn-direct begin (managed by ocserv-panel)"
+const cnBlockEnd = "# cn-direct end"
+
+func cnZonePath() string { return "/etc/ocserv/cn-aggregated.zone" }
+
+// downloadCNZone fetches the aggregated China IPv4 list with validation and a
+// fallback mirror, keeping the previous cache untouched on any failure.
+func downloadCNZone() (int, error) {
+	sources := []string{
+		"https://www.ipdeny.com/ipblocks/data/aggregated/cn-aggregated.zone",
+		"https://cdn.jsdelivr.net/gh/zengfr/rgn@main/cn-aggregated.zone",
+	}
+	client := &http.Client{Timeout: 60 * time.Second}
+	var lastErr error
+	for _, url := range sources {
+		resp, err := client.Get(url)
+		if err != nil {
+			lastErr = err
+			continue
+		}
+		body, err := io.ReadAll(io.LimitReader(resp.Body, 4<<20))
+		resp.Body.Close()
+		if err != nil {
+			lastErr = err
+			continue
+		}
+		if resp.StatusCode != 200 {
+			lastErr = fmt.Errorf("%s: HTTP %d", url, resp.StatusCode)
+			continue
+		}
+		cidrs, err := validateCIDRList(string(body))
+		if err != nil {
+			lastErr = fmt.Errorf("%s: %w", url, err)
+			continue
+		}
+		if len(cidrs) < 4000 {
+			lastErr = fmt.Errorf("%s: suspiciously small list (%d entries), keeping cache", url, len(cidrs))
+			continue
+		}
+		var buf bytes.Buffer
+		buf.WriteString("# China IPv4 aggregated zone, fetched " + time.Now().Format("2006-01-02 15:04:05") + "\n")
+		buf.WriteString(strings.Join(cidrs, "\n"))
+		buf.WriteString("\n")
+		if err := os.WriteFile(cnZonePath(), buf.Bytes(), 0644); err != nil {
+			return 0, err
+		}
+		return len(cidrs), nil
+	}
+	return 0, lastErr
+}
+
+func validateCIDRList(content string) ([]string, error) {
+	var out []string
+	for _, line := range strings.Split(content, "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		if _, _, err := net.ParseCIDR(line); err != nil {
+			return nil, fmt.Errorf("invalid CIDR line %q", line)
+		}
+		out = append(out, line)
+	}
+	if len(out) == 0 {
+		return nil, fmt.Errorf("empty list")
+	}
+	return out, nil
+}
+
+// cnZoneCIDRs returns the cached China list; nil when there is none.
+func cnZoneCIDRs() []string {
+	data, err := os.ReadFile(cnZonePath())
+	if err != nil {
+		return nil
+	}
+	cidrs, err := validateCIDRList(string(data))
+	if err != nil {
+		return nil
+	}
+	return cidrs
+}
+
+// syncCNDirect rewrites the managed no-route block of every CN-enabled group
+// from the current zone cache. Called after each zone refresh.
+func syncCNDirect() {
+	cidrs := cnZoneCIDRs()
+	if cidrs == nil {
+		return
+	}
+	entries, err := os.ReadDir(getConfig().GroupDir)
+	if err != nil {
+		return
+	}
+	for _, entry := range entries {
+		if entry.IsDir() || strings.HasPrefix(entry.Name(), ".") {
+			continue
+		}
+		path := filepath.Join(getConfig().GroupDir, entry.Name())
+		data, err := os.ReadFile(path)
+		if err != nil {
+			continue
+		}
+		g := parseGroupConfig(entry.Name(), string(data))
+		if !g.CNDirect {
+			continue
+		}
+		updated := writeCNBlock(string(data), cidrs)
+		if updated != string(data) {
+			if err := os.WriteFile(path, []byte(updated), 0644); err != nil {
+				log.Printf("syncCNDirect: cannot update %s: %v", path, err)
+			} else {
+				log.Printf("syncCNDirect: updated CN block in %s (%d routes)", entry.Name(), len(cidrs))
+			}
+		}
+	}
+}
+
+// writeCNBlock replaces (or appends) the managed CN no-route block in a group
+// file, preserving everything outside the markers.
+func writeCNBlock(content string, cidrs []string) string {
+	begin := byteOffsetOfLine(content, cnBlockBegin)
+	var head, tail string
+	if begin >= 0 {
+		// Malformed file (begin without end): drop from begin to EOF so the
+		// rewritten block stays the only managed section.
+		head = content[:begin]
+		rest := content[begin+len(cnBlockBegin):]
+		if e := byteOffsetOfLine(rest, cnBlockEnd); e >= 0 {
+			tail = strings.TrimLeft(strings.TrimPrefix(rest[e:], cnBlockEnd), "\r")
+			tail = strings.TrimPrefix(tail, "\n")
+		}
+	} else {
+		if content != "" && !strings.HasSuffix(content, "\n") {
+			content += "\n"
+		}
+		head = content
+	}
+	var buf strings.Builder
+	buf.WriteString(head)
+	buf.WriteString(cnBlockBegin + "\n")
+	for _, c := range cidrs {
+		buf.WriteString("no-route = " + c + "\n")
+	}
+	buf.WriteString(cnBlockEnd + "\n")
+	buf.WriteString(tail)
+	return buf.String()
+}
+
+// byteOffsetOfLine returns the byte offset where the given (trimmed) line
+// starts, or -1 if absent.
+func byteOffsetOfLine(content, line string) int {
+	offset := 0
+	for _, l := range strings.Split(content, "\n") {
+		if strings.TrimSpace(l) == line {
+			return offset
+		}
+		offset += len(l) + 1
+	}
+	return -1
+}
+
+// buildGroupFileContent assembles a group file from form fields plus the
+// managed CN block when enabled.
+func buildGroupFileContent(name string, r *http.Request) string {
+	var lines []string
+	displayName := strings.TrimSpace(r.FormValue("display_name"))
+	if displayName != "" {
+		// Metadata is kept in a comment so ocserv does not parse it as an option.
+		lines = append(lines, fmt.Sprintf("# display-name = %s", displayName))
+	}
+	rx := atoiDefault(r.FormValue("rx_data_per_sec"), 0)
+	tx := atoiDefault(r.FormValue("tx_data_per_sec"), 0)
+	st := atoiDefault(r.FormValue("session_timeout"), 0)
+	it := atoiDefault(r.FormValue("idle_timeout"), 0)
+	dns := r.FormValue("dns")
+	routes := r.FormValue("routes")
+	noRoutes := r.FormValue("no_routes")
+	msc := atoiDefault(r.FormValue("max_same_clients"), 0)
+	if rx > 0 {
+		lines = append(lines, fmt.Sprintf("rx-data-per-sec = %d", rx))
+	}
+	if tx > 0 {
+		lines = append(lines, fmt.Sprintf("tx-data-per-sec = %d", tx))
+	}
+	if st > 0 {
+		lines = append(lines, fmt.Sprintf("session-timeout = %d", st))
+	}
+	if it > 0 {
+		lines = append(lines, fmt.Sprintf("idle-timeout = %d", it))
+	}
+	if dns != "" {
+		for _, d := range strings.Fields(dns) {
+			lines = append(lines, fmt.Sprintf("dns = %s", d))
+		}
+	}
+	for _, route := range strings.Fields(routes) {
+		lines = append(lines, fmt.Sprintf("route = %s", route))
+	}
+	for _, route := range strings.Fields(noRoutes) {
+		lines = append(lines, fmt.Sprintf("no-route = %s", route))
+	}
+	if msc > 0 {
+		lines = append(lines, fmt.Sprintf("max-same-clients = %d", msc))
+	}
+	content := fmt.Sprintf("# Group: %s\n# Generated: %s\n%s\n", name, time.Now().Format("2006-01-02 15:04:05"), strings.Join(lines, "\n"))
+	if r.FormValue("cn_direct") == "on" {
+		if cidrs := cnZoneCIDRs(); cidrs != nil {
+			content = writeCNBlock(content, cidrs)
+		}
+	}
+	return content
 }
 
 // ============================================================
